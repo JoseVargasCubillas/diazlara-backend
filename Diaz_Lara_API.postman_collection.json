@@ -1,0 +1,587 @@
+{
+  "info": {
+    "_postman_id": "diazlara-backend",
+    "name": "Díaz Lara Backend API",
+    "description": "Complete API collection for appointment booking system",
+    "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+  },
+  "variable": [
+    {
+      "key": "base_url",
+      "value": "http://localhost:3000/api",
+      "type": "default"
+    },
+    {
+      "key": "token",
+      "value": "",
+      "type": "default"
+    }
+  ],
+  "item": [
+    {
+      "name": "Authentication",
+      "item": [
+        {
+          "name": "Login - Consultant",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.environment.set('token', jsonData.token);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"email\": \"contacto@diazlara.mx\", \"password\": \"SecurePassword123\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/login",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "login"]
+            }
+          }
+        },
+        {
+          "name": "Logout",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/logout",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "logout"]
+            }
+          }
+        },
+        {
+          "name": "Get Profile",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/profile",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "profile"]
+            }
+          }
+        },
+        {
+          "name": "Update Profile",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"nombre\": \"Diego\", \"apellido\": \"Díaz\", \"especialidad\": \"Consultoría Fiscal y Contable\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/profile",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "profile"]
+            }
+          }
+        },
+        {
+          "name": "Change Password",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"currentPassword\": \"OldPassword123\", \"newPassword\": \"NewPassword456\", \"confirmPassword\": \"NewPassword456\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/admin/change-password",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "change-password"]
+            }
+          }
+        },
+        {
+          "name": "List All Consultants",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/admin/consultants",
+              "host": ["{{base_url}}"],
+              "path": ["admin", "consultants"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Leads",
+      "item": [
+        {
+          "name": "Create Lead",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.environment.set('cliente_id', jsonData.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"nombre\": \"Juan\", \"apellido\": \"García\", \"email\": \"juan@empresa.com\", \"telefono_whatsapp\": \"5551234567\", \"empresa\": \"Tech Solutions SA\", \"puesto\": \"Director General\", \"servicios\": [\"Impuestos y planeación fiscal\", \"Planeación patrimonial\"], \"origen\": \"web\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/leads",
+              "host": ["{{base_url}}"],
+              "path": ["leads"]
+            }
+          }
+        },
+        {
+          "name": "Get Lead Details",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/leads/{{cliente_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["leads", "{{cliente_id}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Availability",
+      "item": [
+        {
+          "name": "Get All Consultants",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 200) {",
+                  "    var jsonData = pm.response.json();",
+                  "    if (jsonData.data && jsonData.data.length > 0) {",
+                  "        pm.environment.set('consultor_id', jsonData.data[0].id);",
+                  "    }",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/availability/consultants",
+              "host": ["{{base_url}}"],
+              "path": ["availability", "consultants"]
+            }
+          }
+        },
+        {
+          "name": "Get Consultant By ID",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/availability/consultants/{{consultor_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["availability", "consultants", "{{consultor_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Get Available Slots for Date",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/availability/consultants/{{consultor_id}}/slots?date=2026-04-25&duration=15&timezone=America/Mexico_City",
+              "host": ["{{base_url}}"],
+              "path": ["availability", "consultants", "{{consultor_id}}", "slots"],
+              "query": [
+                {
+                  "key": "date",
+                  "value": "2026-04-25"
+                },
+                {
+                  "key": "duration",
+                  "value": "15",
+                  "disabled": false
+                },
+                {
+                  "key": "timezone",
+                  "value": "America/Mexico_City",
+                  "disabled": false
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Calendar - Next Available Dates",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/availability/consultants/{{consultor_id}}/calendar?days=30",
+              "host": ["{{base_url}}"],
+              "path": ["availability", "consultants", "{{consultor_id}}", "calendar"],
+              "query": [
+                {
+                  "key": "days",
+                  "value": "30"
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Appointments",
+      "item": [
+        {
+          "name": "Create Appointment",
+          "event": [
+            {
+              "listen": "test",
+              "script": {
+                "exec": [
+                  "if (pm.response.code === 201) {",
+                  "    var jsonData = pm.response.json();",
+                  "    pm.environment.set('cita_id', jsonData.data.id);",
+                  "}"
+                ]
+              }
+            }
+          ],
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"consultor_id\": \"{{consultor_id}}\", \"fecha_hora_inicio\": \"2026-04-25T10:00:00Z\", \"fecha_hora_fin\": \"2026-04-25T10:15:00Z\", \"notas_cliente\": \"Interesado en planeación fiscal\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/appointments?cliente_id={{cliente_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["appointments"],
+              "query": [
+                {
+                  "key": "cliente_id",
+                  "value": "{{cliente_id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Appointment Details",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/appointments/{{cita_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["appointments", "{{cita_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Get Client Appointments",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/appointments?cliente_id={{cliente_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["appointments"],
+              "query": [
+                {
+                  "key": "cliente_id",
+                  "value": "{{cliente_id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Consultant Appointments",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/appointments?consultor_id={{consultor_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["appointments"],
+              "query": [
+                {
+                  "key": "consultor_id",
+                  "value": "{{consultor_id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Get Appointments by Date Range",
+          "request": {
+            "method": "GET",
+            "url": {
+              "raw": "{{base_url}}/appointments?consultor_id={{consultor_id}}&from=2026-04-01T00:00:00Z&to=2026-05-01T00:00:00Z",
+              "host": ["{{base_url}}"],
+              "path": ["appointments"],
+              "query": [
+                {
+                  "key": "consultor_id",
+                  "value": "{{consultor_id}}"
+                },
+                {
+                  "key": "from",
+                  "value": "2026-04-01T00:00:00Z"
+                },
+                {
+                  "key": "to",
+                  "value": "2026-05-01T00:00:00Z"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Update Appointment Status",
+          "request": {
+            "method": "PATCH",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"estado\": \"confirmada\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/appointments/{{cita_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["appointments", "{{cita_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Cancel Appointment",
+          "request": {
+            "method": "DELETE",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/appointments/{{cita_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["appointments", "{{cita_id}}"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Qualifications",
+      "item": [
+        {
+          "name": "Create Qualification",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              },
+              {
+                "key": "Content-Type",
+                "value": "application/json"
+              }
+            ],
+            "body": {
+              "mode": "raw",
+              "raw": "{\"cita_id\": \"{{cita_id}}\", \"resultado\": \"caliente\", \"score_interes\": \"alto\", \"notas_internas\": \"Lead muy interesado, preparado para propuesta\"}"
+            },
+            "url": {
+              "raw": "{{base_url}}/qualifications",
+              "host": ["{{base_url}}"],
+              "path": ["qualifications"]
+            }
+          }
+        },
+        {
+          "name": "Get Qualification by ID",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/qualifications/{{qualification_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["qualifications", "{{qualification_id}}"]
+            }
+          }
+        },
+        {
+          "name": "Get Qualification by Appointment",
+          "request": {
+            "method": "GET",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/qualifications?cita_id={{cita_id}}",
+              "host": ["{{base_url}}"],
+              "path": ["qualifications"],
+              "query": [
+                {
+                  "key": "cita_id",
+                  "value": "{{cita_id}}"
+                }
+              ]
+            }
+          }
+        },
+        {
+          "name": "Export Qualification to HubSpot",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Authorization",
+                "value": "Bearer {{token}}"
+              }
+            ],
+            "url": {
+              "raw": "{{base_url}}/qualifications/{{qualification_id}}/export-hubspot",
+              "host": ["{{base_url}}"],
+              "path": ["qualifications", "{{qualification_id}}", "export-hubspot"]
+            }
+          }
+        }
+      ]
+    },
+    {
+      "name": "Webhooks",
+      "item": [
+        {
+          "name": "Twilio WhatsApp Status",
+          "request": {
+            "method": "POST",
+            "header": [
+              {
+                "key": "Content-Type",
+                "value": "application/x-www-form-urlencoded"
+              }
+            ],
+            "body": {
+              "mode": "urlencoded",
+              "urlencoded": [
+                {
+                  "key": "MessageSid",
+                  "value": "SM1234567890abcdef"
+                },
+                {
+                  "key": "MessageStatus",
+                  "value": "delivered"
+                },
+                {
+                  "key": "To",
+                  "value": "whatsapp:+5551234567"
+                },
+                {
+                  "key": "From",
+                  "value": "whatsapp:+14155552671"
+                }
+              ]
+            },
+            "url": {
+              "raw": "{{base_url}}/webhooks/twilio",
+              "host": ["{{base_url}}"],
+              "path": ["webhooks", "twilio"]
+            }
+          }
+        }
+      ]
+    }
+  ]
+}
