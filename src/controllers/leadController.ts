@@ -1,10 +1,19 @@
 import { getDatabase } from '../config/database';
 import { logger } from '../config/logger';
-import { LeadSubmissionRequest, Cliente, ConflictError, ValidationError } from '../types';
+import { LeadSubmissionRequest, ValidationError } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 
+interface LeadWaitingResponse {
+  id: string;
+  nombre: string;
+  email: string;
+  estado: string;
+  created_at: Date;
+  mensaje: string;
+}
+
 class LeadController {
-  async createLead(leadData: LeadSubmissionRequest): Promise<Partial<Cliente>> {
+  async createLead(leadData: LeadSubmissionRequest): Promise<LeadWaitingResponse> {
     try {
       const pool = await getDatabase();
 
@@ -18,44 +27,47 @@ class LeadController {
         throw new ValidationError('Invalid phone format', { phone: 'Phone must be in format: 5212345678' });
       }
 
-      // Check if email already exists
+      // Check if email already exists in waiting list
       const [existingRows] = await pool.execute(
-        'SELECT id FROM CLIENTES WHERE email = ?',
+        'SELECT id FROM LEADS_EN_ESPERA WHERE email = ? AND estado IN ("pendiente", "aprobado")',
         [leadData.email]
       );
 
       if (Array.isArray(existingRows) && existingRows.length > 0) {
-        throw new ConflictError('Email already exists in the system', {
-          clientId: (existingRows[0] as any).id,
+        throw new ValidationError('Email already registered in waiting list', {
+          email: 'Este email ya está en nuestra lista de espera',
         });
       }
 
-      // Create new client
-      const clientId = uuidv4();
+      // Create new lead in waiting list
+      const leadId = uuidv4();
       const origen = leadData.origen || 'web';
+      const servicios = JSON.stringify(leadData.servicios || []);
 
       await pool.execute(
-        `INSERT INTO CLIENTES (id, nombre, apellido, email, telefono_whatsapp, empresa, puesto, origen, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+        `INSERT INTO LEADS_EN_ESPERA (id, nombre, email, telefono_whatsapp, empresa, puesto, servicios, estado, origen, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, NOW())`,
         [
-          clientId,
+          leadId,
           leadData.nombre,
-          leadData.apellido || null,
           leadData.email,
           leadData.telefono_whatsapp || null,
           leadData.empresa || null,
           leadData.puesto || null,
+          servicios,
           origen,
         ]
       );
 
-      logger.info(`New lead created: ${clientId} (${leadData.email})`);
+      logger.info(`New lead in waiting list: ${leadId} (${leadData.email})`);
 
       return {
-        id: clientId,
+        id: leadId,
         nombre: leadData.nombre,
         email: leadData.email,
+        estado: 'pendiente',
         created_at: new Date(),
+        mensaje: 'Tu solicitud ha sido recibida. Un asesor se pondrá en contacto contigo pronto.',
       };
     } catch (error) {
       logger.error('Error creating lead:', error);
@@ -63,17 +75,17 @@ class LeadController {
     }
   }
 
-  async getLead(clientId: string): Promise<Cliente | null> {
+  async getLeadFromWaitingList(leadId: string) {
     try {
       const pool = await getDatabase();
 
       const [rows] = await pool.execute(
-        'SELECT * FROM CLIENTES WHERE id = ?',
-        [clientId]
+        'SELECT * FROM LEADS_EN_ESPERA WHERE id = ?',
+        [leadId]
       );
 
       if (Array.isArray(rows) && rows.length > 0) {
-        return rows[0] as Cliente;
+        return rows[0];
       }
 
       return null;
@@ -96,3 +108,4 @@ class LeadController {
 }
 
 export const leadController = new LeadController();
+

@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authController } from '../controllers/authController';
-import { authenticateToken, requireRole } from '../middleware/auth';
+import { leadApprovalController } from '../controllers/leadApprovalController';
+import { authenticateToken } from '../middleware/auth';
 import { AppError, ValidationError } from '../types';
 import { validationService } from '../services/ValidationService';
 
@@ -160,26 +161,139 @@ router.post(
 );
 
 /**
- * GET /api/admin/consultants
- * List all consultants (admin only)
+ * GET /api/admin/leads-espera
+ * List leads in waiting list by status
+ * Query: ?estado=pendiente&limit=50
  */
 router.get(
-  '/consultants',
+  '/leads-espera',
   authenticateToken,
-  requireRole('super_admin'),
-  async (_req: Request, res: Response, next: NextFunction) => {
+  async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const pool = await (await import('../config/database')).getDatabase();
+      const estado = (req.query.estado as string) || 'pendiente';
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
 
-      const [rows] = await pool.execute(
-        `SELECT id, nombre, apellido, email, especialidad, activo, created_at
-         FROM CONSULTORES
-         ORDER BY created_at DESC`
-      );
+      const leads = await leadApprovalController.listWaitingLeads(estado, limit);
+      const leadArray = Array.isArray(leads) ? leads : [];
 
       res.json({
         success: true,
-        data: rows,
+        data: leadArray,
+        count: leadArray.length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PATCH /api/admin/leads-espera/:leadId/aprobar
+ * Approve a lead from waiting list
+ */
+router.patch(
+  '/leads-espera/:leadId/aprobar',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { leadId } = req.params;
+      const { consultorId } = req.body;
+
+      const result = await leadApprovalController.approveLead({
+        leadId,
+        consultorId,
+      });
+
+      res.json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PATCH /api/admin/leads-espera/:leadId/rechazar
+ * Reject a lead from waiting list
+ */
+router.patch(
+  '/leads-espera/:leadId/rechazar',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { leadId } = req.params;
+      const { motivo } = req.body;
+
+      const result = await leadApprovalController.rejectLead({
+        leadId,
+        motivo,
+      });
+
+      res.json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/leads-espera/:leadId/enviar-zoom
+ * Send Zoom link to approved lead
+ */
+router.post(
+  '/leads-espera/:leadId/enviar-zoom',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { leadId } = req.params;
+      const { zoomLink } = req.body;
+
+      if (!zoomLink) {
+        throw new ValidationError('Zoom link is required', {
+          zoomLink: 'Zoom link is required',
+        });
+      }
+
+      const result = await leadApprovalController.sendZoomLink({
+        leadId,
+        zoomLink,
+      });
+
+      res.json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/leads-espera/:leadId/convertir-cliente
+ * Convert approved lead to client (for scheduling appointments)
+ */
+router.post(
+  '/leads-espera/:leadId/convertir-cliente',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { leadId } = req.params;
+
+      const result = await leadApprovalController.convertApprovedLeadToClient(leadId);
+
+      res.json({
+        success: true,
+        data: result,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {

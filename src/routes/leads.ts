@@ -34,17 +34,17 @@ router.post(
 
 /**
  * GET /api/leads/:id
- * Retrieve lead details (admin only)
+ * Retrieve lead details from waiting list
  */
 router.get(
   '/:id',
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
-      const lead = await leadController.getLead(id);
+      const lead = await leadController.getLeadFromWaitingList(id);
 
       if (!lead) {
-        throw new AppError('Lead not found', 404);
+        throw new AppError('Lead not found in waiting list', 404);
       }
 
       res.json({
