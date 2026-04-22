@@ -2,6 +2,7 @@ import { getDatabase } from '../config/database';
 import { logger } from '../config/logger';
 import { ValidationError } from '../types';
 import { v4 as uuidv4 } from 'uuid';
+import { consultoriaIntegrationService } from '../services/ConsultoriaIntegrationService';
 
 interface ApproveLeadRequest {
   leadId: string;
@@ -56,6 +57,8 @@ class LeadApprovalController {
         throw new ValidationError('Lead not found', { leadId: 'Lead does not exist' });
       }
 
+      const lead = leadRows[0] as any;
+
       // Update lead status to approved
       await pool.execute(
         `UPDATE LEADS_EN_ESPERA
@@ -66,10 +69,41 @@ class LeadApprovalController {
 
       logger.info(`Lead approved: ${data.leadId}`);
 
+      // Sync with Consultoria - create cliente there
+      let syncResult = null;
+      try {
+        syncResult = await consultoriaIntegrationService.syncLeadToConsultoria({
+          leadId: data.leadId,
+          nombre: lead.nombre,
+          email: lead.email,
+          telefono_whatsapp: lead.telefono_whatsapp,
+          empresa: lead.empresa,
+          puesto: lead.puesto,
+          servicios: lead.servicios ? JSON.parse(lead.servicios) : [],
+          consultorId: data.consultorId,
+        });
+
+        // Store Consultoria cliente ID for reference
+        await pool.execute(
+          `UPDATE LEADS_EN_ESPERA
+           SET consultoria_cliente_id = ?
+           WHERE id = ?`,
+          [syncResult.clienteId, data.leadId]
+        );
+
+        logger.info(`Lead synced to Consultoria: ${data.leadId} -> Cliente ${syncResult.clienteId}`);
+      } catch (syncError) {
+        logger.error(`Warning: Could not sync lead to Consultoria: ${data.leadId}`, syncError);
+        // Continue anyway - don't block approval if sync fails
+      }
+
       return {
         id: data.leadId,
         estado: 'aprobado',
-        mensaje: 'Lead aprobado. Puedes enviar el link de Zoom cuando esté listo.',
+        consultoriaClienteId: syncResult?.clienteId,
+        mensaje: syncResult
+          ? 'Lead aprobado y sincronizado con Consultoria. Puedes enviar el link de Zoom.'
+          : 'Lead aprobado. Puedes enviar el link de Zoom cuando esté listo.',
       };
     } catch (error) {
       logger.error('Error approving lead:', error);
