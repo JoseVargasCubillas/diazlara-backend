@@ -22,6 +22,7 @@ export async function initializeDatabase(): Promise<mysql.Pool> {
       enableKeepAlive: true,
       keepAliveInitialDelay: 30000,
       timezone: 'Z', // Use UTC
+      charset: 'utf8mb4',
     });
 
     // Test connection

@@ -67,6 +67,7 @@ app.use((_req: Request, res: Response, next: NextFunction) => {
 // ============================================================
 
 app.use('/api/leads', require('./routes/leads').default);
+app.use('/api/sessions', require('./routes/sessions').default);
 app.use('/api/availability', require('./routes/availability').default);
 app.use('/api/appointments', require('./routes/appointments').default);
 app.use('/api/qualifications', require('./routes/qualifications').default);

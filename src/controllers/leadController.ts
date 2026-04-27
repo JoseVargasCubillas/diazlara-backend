@@ -29,7 +29,7 @@ class LeadController {
 
       // Check if email already exists in waiting list
       const [existingRows] = await pool.execute(
-        'SELECT id FROM LEADS_EN_ESPERA WHERE email = ? AND estado IN ("pendiente", "aprobado")',
+        'SELECT id FROM LEADS_EN_ESPERA WHERE email = ? AND estado IN ("pendiente", "aprobado", "sesion_agendada")',
         [leadData.email]
       );
 
@@ -45,8 +45,8 @@ class LeadController {
       const servicios = JSON.stringify(leadData.servicios || []);
 
       await pool.execute(
-        `INSERT INTO LEADS_EN_ESPERA (id, nombre, email, telefono_whatsapp, empresa, puesto, servicios, estado, origen, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, 'pendiente', ?, NOW())`,
+        `INSERT INTO LEADS_EN_ESPERA (id, nombre, email, telefono_whatsapp, empresa, puesto, servicios, estado, estatus_comercial, origen, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 'pendiente', 'interesado', ?, NOW())`,
         [
           leadId,
           leadData.nombre,
@@ -70,9 +70,58 @@ class LeadController {
         mensaje: 'Tu solicitud ha sido recibida. Un asesor se pondrá en contacto contigo pronto.',
       };
     } catch (error) {
+      const dbErrorCode = (error as { code?: string }).code;
+
+      if (dbErrorCode === 'ER_NO_SUCH_TABLE') {
+        logger.warn('LEADS_EN_ESPERA table not found. Falling back to CLIENTES table.');
+        return this.createLeadInClientesFallback(leadData);
+      }
+
       logger.error('Error creating lead:', error);
       throw error;
     }
+  }
+
+  private async createLeadInClientesFallback(leadData: LeadSubmissionRequest): Promise<LeadWaitingResponse> {
+    const pool = await getDatabase();
+
+    const [existingClientRows] = await pool.execute(
+      'SELECT id FROM CLIENTES WHERE email = ?',
+      [leadData.email]
+    );
+
+    if (Array.isArray(existingClientRows) && existingClientRows.length > 0) {
+      throw new ValidationError('Email already registered', {
+        email: 'Este email ya está registrado en nuestra base de clientes',
+      });
+    }
+
+    const clientId = uuidv4();
+
+    await pool.execute(
+      `INSERT INTO CLIENTES (id, nombre, email, telefono_whatsapp, empresa, puesto, origen, estatus_comercial, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'interesado', NOW())`,
+      [
+        clientId,
+        leadData.nombre,
+        leadData.email,
+        leadData.telefono_whatsapp || null,
+        leadData.empresa || null,
+        leadData.puesto || null,
+        leadData.origen || 'web',
+      ]
+    );
+
+    logger.info(`New lead stored in CLIENTES fallback: ${clientId} (${leadData.email})`);
+
+    return {
+      id: clientId,
+      nombre: leadData.nombre,
+      email: leadData.email,
+      estado: 'pendiente',
+      created_at: new Date(),
+      mensaje: 'Tu solicitud ha sido recibida. Un asesor se pondrá en contacto contigo pronto.',
+    };
   }
 
   async getLeadFromWaitingList(leadId: string) {

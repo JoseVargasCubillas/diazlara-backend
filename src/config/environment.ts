@@ -5,16 +5,10 @@ dotenv.config();
 
 export function validateEnvironment(): void {
   const required = [
-    'NODE_ENV',
-    'PORT',
     'DB_HOST',
     'DB_USER',
     'DB_NAME',
     'JWT_SECRET',
-    'SENDGRID_API_KEY',
-    'TWILIO_ACCOUNT_SID',
-    'TWILIO_AUTH_TOKEN',
-    'CORS_ORIGIN',
   ];
 
   const missing: string[] = [];
@@ -28,7 +22,7 @@ export function validateEnvironment(): void {
   if (missing.length > 0) {
     throw new Error(
       `Missing required environment variables: ${missing.join(', ')}\n` +
-      `Copy .env.example to .env and fill in all required values.`
+      `Copy .env.example to .env and fill in core API/DB values.`
     );
   }
 

@@ -7,7 +7,7 @@ import { appointmentScheduler } from './services/AppointmentScheduler';
 try {
   validateEnvironment();
 } catch (error) {
-  logger.error('Environment validation failed:', error);
+  logger.error({ err: error }, 'Environment validation failed');
   process.exit(1);
 }
 
@@ -32,11 +32,11 @@ process.on('SIGTERM', () => {
 });
 
 process.on('unhandledRejection', (reason: any) => {
-  logger.error('Unhandled Rejection at:', reason);
+  logger.error({ reason }, 'Unhandled Rejection');
   process.exit(1);
 });
 
 process.on('uncaughtException', (error: Error) => {
-  logger.error('Uncaught Exception:', error);
+  logger.error({ err: error }, 'Uncaught Exception');
   process.exit(1);
 });

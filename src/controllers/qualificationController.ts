@@ -53,14 +53,15 @@ class QualificationController {
       const calificacionId = Array.isArray(existingRows) && existingRows.length > 0
         ? (existingRows[0] as any).id
         : uuidv4();
+      const estatusComercial = data.estatus_comercial || 'prospecto';
 
       if (Array.isArray(existingRows) && existingRows.length > 0) {
         // Update existing
         await pool.execute(
           `UPDATE CALIFICACIONES
-           SET resultado = ?, score_interes = ?, notas_internas = ?
+           SET resultado = ?, score_interes = ?, notas_internas = ?, estatus_comercial = ?
            WHERE cita_id = ?`,
-          [data.resultado, data.score_interes, data.notas_internas || null, data.cita_id]
+          [data.resultado, data.score_interes, data.notas_internas || null, estatusComercial, data.cita_id]
         );
 
         logger.info(`Qualification updated: ${calificacionId}`);
@@ -68,20 +69,35 @@ class QualificationController {
         // Create new
         await pool.execute(
           `INSERT INTO CALIFICACIONES
-           (id, cita_id, consultor_id, resultado, score_interes, notas_internas, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, NOW())`,
+           (id, cita_id, consultor_id, resultado, score_interes, estatus_comercial, notas_internas, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
           [
             calificacionId,
             data.cita_id,
             consultorId,
             data.resultado,
             data.score_interes,
+            estatusComercial,
             data.notas_internas || null,
           ]
         );
 
         logger.info(`Qualification created: ${calificacionId}`);
       }
+
+      await pool.execute(
+        `UPDATE CLIENTES
+         SET estatus_comercial = ?
+         WHERE id = ?`,
+        [estatusComercial, cita.cliente_id]
+      );
+
+      await pool.execute(
+        `UPDATE LEADS_EN_ESPERA
+         SET estatus_comercial = ?, updated_at = NOW()
+         WHERE email = ?`,
+        [estatusComercial, client.email]
+      );
 
       // Sync qualification to HubSpot (async, don't wait)
       setImmediate(() => {

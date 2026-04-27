@@ -1,8 +1,9 @@
 import { getDatabase } from '../config/database';
 import { logger } from '../config/logger';
-import { ValidationError } from '../types';
+import { LeadSessionAssignmentRequest, ValidationError } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import { consultoriaIntegrationService } from '../services/ConsultoriaIntegrationService';
+import { appointmentController } from './appointmentController';
 
 interface ApproveLeadRequest {
   leadId: string;
@@ -21,20 +22,46 @@ interface SendZoomLinkRequest {
 }
 
 class LeadApprovalController {
-  async listWaitingLeads(estado: string = 'pendiente', limit: number = 50) {
+  async listWaitingLeads(estado: string = 'pendiente', limit: number = 50, estatusComercial?: string) {
     try {
       const pool = await getDatabase();
+      const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
 
-      const [rows] = await pool.execute(
-        `SELECT
-          id, nombre, email, telefono_whatsapp, empresa, puesto,
-          servicios, estado, consultor_id, zoom_link, created_at, updated_at
-         FROM LEADS_EN_ESPERA
-         WHERE estado = ?
-         ORDER BY created_at ASC
-         LIMIT ?`,
-        [estado, limit]
-      );
+      let query = `SELECT
+          l.id, l.nombre, l.email, l.telefono_whatsapp, l.empresa, l.puesto,
+          l.servicios, l.estado, l.estatus_comercial, l.consultor_id, l.zoom_link,
+          l.consultoria_cliente_id, l.created_at, l.updated_at,
+          c.id            AS cita_id,
+          c.fecha_hora_inicio AS cita_fecha_hora_inicio,
+          c.fecha_hora_fin   AS cita_fecha_hora_fin,
+          c.meet_link        AS cita_meet_link,
+          c.estado           AS cita_estado,
+          c.notas_cliente    AS cita_notas_cliente,
+          cons.nombre        AS consultor_nombre,
+          cons.apellido      AS consultor_apellido,
+          cons.email         AS consultor_email
+         FROM LEADS_EN_ESPERA l
+         LEFT JOIN CLIENTES cli ON cli.email = l.email
+         LEFT JOIN CITAS c ON c.id = (
+           SELECT c2.id FROM CITAS c2
+           WHERE c2.cliente_id = cli.id
+             AND (l.consultor_id IS NULL OR c2.consultor_id = l.consultor_id)
+             AND c2.estado IN ('pendiente', 'confirmada', 'completada')
+           ORDER BY c2.fecha_hora_inicio DESC
+           LIMIT 1
+         )
+         LEFT JOIN CONSULTORES cons ON cons.id = l.consultor_id
+         WHERE l.estado = ?`;
+      const params: Array<string | number> = [estado];
+
+      if (estatusComercial) {
+        query += ' AND l.estatus_comercial = ?';
+        params.push(estatusComercial);
+      }
+
+      query += ` ORDER BY l.created_at ASC LIMIT ${safeLimit}`;
+
+      const [rows] = await pool.execute(query, params);
 
       return rows || [];
     } catch (error) {
@@ -62,7 +89,7 @@ class LeadApprovalController {
       // Update lead status to approved
       await pool.execute(
         `UPDATE LEADS_EN_ESPERA
-         SET estado = 'aprobado', consultor_id = ?, fecha_aprovado = NOW()
+         SET estado = 'aprobado', consultor_id = ?, fecha_aprovado = NOW(), estatus_comercial = COALESCE(estatus_comercial, 'interesado')
          WHERE id = ?`,
         [data.consultorId || null, data.leadId]
       );
@@ -215,37 +242,7 @@ class LeadApprovalController {
 
       const lead = leadRows[0] as any;
 
-      // Check if client already exists
-      const [existingClient] = await pool.execute(
-        'SELECT id FROM CLIENTES WHERE email = ?',
-        [lead.email]
-      );
-
-      let clientId: string;
-
-      if (Array.isArray(existingClient) && existingClient.length > 0) {
-        clientId = (existingClient[0] as any).id;
-        logger.info(`Client already exists: ${clientId}`);
-      } else {
-        // Create new client from lead
-        clientId = uuidv4();
-
-        await pool.execute(
-          `INSERT INTO CLIENTES (id, nombre, email, telefono_whatsapp, empresa, puesto, origen, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
-          [
-            clientId,
-            lead.nombre,
-            lead.email,
-            lead.telefono_whatsapp || null,
-            lead.empresa || null,
-            lead.puesto || null,
-            lead.origen || 'web',
-          ]
-        );
-
-        logger.info(`New client created from lead: ${clientId}`);
-      }
+      const clientId = await this.ensureClientFromLead(lead);
 
       return {
         clientId,
@@ -256,6 +253,123 @@ class LeadApprovalController {
       logger.error('Error converting lead to client:', error);
       throw error;
     }
+  }
+
+  async assignSessionToLead(leadId: string, data: LeadSessionAssignmentRequest) {
+    try {
+      const pool = await getDatabase();
+
+      const [leadRows] = await pool.execute(
+        'SELECT * FROM LEADS_EN_ESPERA WHERE id = ?',
+        [leadId]
+      );
+
+      if (!Array.isArray(leadRows) || leadRows.length === 0) {
+        throw new ValidationError('Lead not found', { leadId: 'Lead does not exist' });
+      }
+
+      const lead = leadRows[0] as any;
+
+      if (lead.estado === 'rechazado') {
+        throw new ValidationError('Rejected leads cannot be scheduled', {
+          estado: 'El lead fue rechazado y no puede agendarse',
+        });
+      }
+
+      const clientId = await this.ensureClientFromLead(lead);
+      const startTime = new Date(data.fecha_hora_inicio);
+      const endTime = data.fecha_hora_fin
+        ? new Date(data.fecha_hora_fin)
+        : new Date(startTime.getTime() + (15 * 60 * 1000));
+
+      // If this lead/cliente already has pending/confirmed citas (with ANY consultor),
+      // cancel them so reschedules don't trigger slot conflicts.
+      await pool.execute(
+        `UPDATE CITAS
+         SET estado = 'cancelada'
+         WHERE cliente_id = ?
+           AND estado IN ('pendiente', 'confirmada')`,
+        [clientId]
+      );
+
+      const appointment = await appointmentController.createAppointment(clientId, {
+        cliente_id: clientId,
+        consultor_id: data.consultor_id,
+        fecha_hora_inicio: startTime.toISOString(),
+        fecha_hora_fin: endTime.toISOString(),
+        notas_cliente: data.notas_cliente,
+      });
+
+      const estatusComercial = data.estatus_comercial || 'prospecto';
+
+      await pool.execute(
+        `UPDATE LEADS_EN_ESPERA
+         SET estado = 'sesion_agendada',
+             consultor_id = ?,
+             fecha_aprovado = COALESCE(fecha_aprovado, NOW()),
+             estatus_comercial = ?,
+             updated_at = NOW()
+         WHERE id = ?`,
+        [data.consultor_id, estatusComercial, leadId]
+      );
+
+      await pool.execute(
+        `UPDATE CLIENTES
+         SET estatus_comercial = ?
+         WHERE id = ?`,
+        [estatusComercial, clientId]
+      );
+
+      logger.info(`Manual session assigned to lead: ${leadId} -> appointment ${appointment.id}`);
+
+      return {
+        leadId,
+        clientId,
+        appointmentId: appointment.id,
+        estado: 'sesion_agendada',
+        estatus_comercial: estatusComercial,
+        appointment,
+        mensaje: 'Sesión asignada correctamente al lead.',
+      };
+    } catch (error) {
+      logger.error('Error assigning session to lead:', error);
+      throw error;
+    }
+  }
+
+  private async ensureClientFromLead(lead: any): Promise<string> {
+    const pool = await getDatabase();
+
+    const [existingClient] = await pool.execute(
+      'SELECT id FROM CLIENTES WHERE email = ?',
+      [lead.email]
+    );
+
+    if (Array.isArray(existingClient) && existingClient.length > 0) {
+      const clientId = (existingClient[0] as any).id;
+      logger.info(`Client already exists: ${clientId}`);
+      return clientId;
+    }
+
+    const clientId = uuidv4();
+
+    await pool.execute(
+      `INSERT INTO CLIENTES (id, nombre, email, telefono_whatsapp, empresa, puesto, origen, estatus_comercial, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      [
+        clientId,
+        lead.nombre,
+        lead.email,
+        lead.telefono_whatsapp || null,
+        lead.empresa || null,
+        lead.puesto || null,
+        lead.origen || 'web',
+        lead.estatus_comercial || 'interesado',
+      ]
+    );
+
+    logger.info(`New client created from lead: ${clientId}`);
+    return clientId;
   }
 }
 

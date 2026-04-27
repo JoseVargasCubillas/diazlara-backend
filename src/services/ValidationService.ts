@@ -103,6 +103,7 @@ export class ValidationService {
       resultado: Joi.string().valid('caliente', 'tibio', 'frio', 'no_aplica').required(),
       score_interes: Joi.string().valid('alto', 'medio', 'bajo').required(),
       notas_internas: Joi.string().optional().max(1000),
+      estatus_comercial: Joi.string().valid('interesado', 'prospecto', 'cliente').optional(),
     });
 
     const { error } = schema.validate(data, { abortEarly: false });

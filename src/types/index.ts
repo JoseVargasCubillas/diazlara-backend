@@ -11,8 +11,12 @@ export interface Cliente {
   empresa?: string;
   puesto?: string;
   origen: 'web' | 'masterclass' | 'referido';
+  estatus_comercial: LeadBusinessStatus;
   created_at: Date;
 }
+
+export type LeadBusinessStatus = 'interesado' | 'prospecto' | 'cliente';
+export type LeadWorkflowStatus = 'pendiente' | 'aprobado' | 'sesion_agendada' | 'rechazado';
 
 export interface Consultor {
   id: string;
@@ -62,6 +66,7 @@ export interface Calificacion {
   resultado: 'caliente' | 'tibio' | 'frio' | 'no_aplica';
   notas_internas?: string;
   score_interes: 'alto' | 'medio' | 'bajo';
+  estatus_comercial: LeadBusinessStatus;
   exportado_hubspot: boolean;
   hubspot_export_at?: Date;
   created_at: Date;
@@ -116,6 +121,15 @@ export interface QualificationRequest {
   resultado: 'caliente' | 'tibio' | 'frio' | 'no_aplica';
   score_interes: 'alto' | 'medio' | 'bajo';
   notas_internas?: string;
+  estatus_comercial?: LeadBusinessStatus;
+}
+
+export interface LeadSessionAssignmentRequest {
+  consultor_id: string;
+  fecha_hora_inicio: string;
+  fecha_hora_fin?: string;
+  notas_cliente?: string;
+  estatus_comercial?: LeadBusinessStatus;
 }
 
 export interface SlotInfo {

@@ -1,8 +1,9 @@
 import { getDatabase } from '../config/database';
 import { logger } from '../config/logger';
-import { Consultor, UnauthorizedError, NotFoundError } from '../types';
+import { Consultor, UnauthorizedError, NotFoundError, ValidationError } from '../types';
 import { generateToken } from '../middleware/auth';
 import bcrypt from 'bcrypt';
+import { v4 as uuidv4 } from 'uuid';
 
 class AuthController {
   /**
@@ -181,6 +182,139 @@ class AuthController {
       logger.info(`Consultant password changed: ${consultorId}`);
     } catch (error) {
       logger.error('Error changing password:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * List all consultants (without sensitive data)
+   */
+  async listConsultores(): Promise<Partial<Consultor>[]> {
+    try {
+      const pool = await getDatabase();
+      const [rows] = await pool.execute(
+        `SELECT id, nombre, apellido, email, especialidad, activo, created_at
+         FROM CONSULTORES ORDER BY created_at DESC`
+      );
+      return (Array.isArray(rows) ? rows : []) as Partial<Consultor>[];
+    } catch (error) {
+      logger.error('Error listing consultores:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Register a new consultant
+   */
+  async registerConsultor(data: {
+    nombre: string;
+    apellido?: string;
+    email: string;
+    password: string;
+    especialidad?: string;
+  }): Promise<Partial<Consultor>> {
+    try {
+      const pool = await getDatabase();
+
+      // Check if email already exists
+      const [existing] = await pool.execute(
+        'SELECT id FROM CONSULTORES WHERE email = ?',
+        [data.email.trim().toLowerCase()]
+      );
+      if (Array.isArray(existing) && existing.length > 0) {
+        throw new ValidationError('Ya existe un consultor con ese correo', {
+          email: 'Email duplicado',
+        });
+      }
+
+      const id = uuidv4();
+      const hash = await bcrypt.hash(data.password, 12);
+
+      await pool.execute(
+        `INSERT INTO CONSULTORES (id, nombre, apellido, email, password_hash, especialidad, activo, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, 1, NOW())`,
+        [
+          id,
+          data.nombre.trim(),
+          data.apellido?.trim() || null,
+          data.email.trim().toLowerCase(),
+          hash,
+          data.especialidad?.trim() || null,
+        ]
+      );
+
+      logger.info(`New consultant registered: ${data.email}`);
+
+      return {
+        id,
+        nombre: data.nombre,
+        apellido: data.apellido,
+        email: data.email.trim().toLowerCase(),
+        especialidad: data.especialidad,
+        activo: true,
+      };
+    } catch (error) {
+      logger.error('Error registering consultor:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Activate or deactivate a consultant
+   */
+  async toggleConsultorActivo(id: string, activo: boolean): Promise<Partial<Consultor>> {
+    try {
+      const pool = await getDatabase();
+      await pool.execute('UPDATE CONSULTORES SET activo = ? WHERE id = ?', [activo ? 1 : 0, id]);
+      logger.info(`Consultant ${id} activo set to ${activo}`);
+      return this.getProfile(id);
+    } catch (error) {
+      logger.error('Error toggling consultor activo:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Change a consultant's password
+   */
+  async changeConsultorPassword(id: string, currentPassword: string, newPassword: string): Promise<void> {
+    try {
+      if (!newPassword || newPassword.length < 6) {
+        throw new ValidationError('La nueva contraseña debe tener al menos 6 caracteres', {
+          newPassword: 'Mínimo 6 caracteres',
+        });
+      }
+      const pool = await getDatabase();
+      const [rows] = await pool.execute('SELECT password_hash FROM CONSULTORES WHERE id = ?', [id]);
+      if (!Array.isArray(rows) || rows.length === 0) {
+        throw new ValidationError('Consultor no encontrado', { id: 'No existe' });
+      }
+      const stored = (rows[0] as any).password_hash as string;
+      const matches = await bcrypt.compare(currentPassword, stored);
+      if (!matches) {
+        throw new ValidationError('La contraseña actual no es correcta', {
+          currentPassword: 'Inválida',
+        });
+      }
+      const hash = await bcrypt.hash(newPassword, 12);
+      await pool.execute('UPDATE CONSULTORES SET password_hash = ? WHERE id = ?', [hash, id]);
+      logger.info(`Consultant ${id} changed password`);
+    } catch (error) {
+      logger.error('Error changing consultor password:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Delete a consultant
+   */
+  async deleteConsultor(id: string): Promise<void> {
+    try {
+      const pool = await getDatabase();
+      await pool.execute('DELETE FROM CONSULTORES WHERE id = ?', [id]);
+      logger.info(`Consultant ${id} deleted`);
+    } catch (error) {
+      logger.error('Error deleting consultor:', error);
       throw error;
     }
   }

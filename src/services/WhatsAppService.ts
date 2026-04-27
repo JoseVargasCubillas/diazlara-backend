@@ -4,7 +4,20 @@ import { logger } from '../config/logger';
 import { templateService } from './TemplateService';
 import { getDatabase } from '../config/database';
 
-const twilioClient = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+let twilioClient: ReturnType<typeof twilio> | null = null;
+
+const getTwilioClient = () => {
+  if (twilioClient) {
+    return twilioClient;
+  }
+
+  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
+    return null;
+  }
+
+  twilioClient = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
+  return twilioClient;
+};
 
 export class WhatsAppService {
   /**
@@ -16,12 +29,22 @@ export class WhatsAppService {
     citaId?: string
   ): Promise<{ sid: string; status: 'queued' | 'sent' | 'failed' }> {
     try {
+      const client = getTwilioClient();
+
+      if (!client || !env.TWILIO_WHATSAPP_NUMBER) {
+        logger.warn('WhatsApp service skipped: missing Twilio credentials');
+        return {
+          sid: '',
+          status: 'failed',
+        };
+      }
+
       // Format phone number: +52 prefix
       const formattedPhone = toPhoneNumber.startsWith('+')
         ? toPhoneNumber
         : `+${toPhoneNumber}`;
 
-      const message = await twilioClient.messages.create({
+      const message = await client.messages.create({
         from: `whatsapp:${env.TWILIO_WHATSAPP_NUMBER}`,
         to: `whatsapp:${formattedPhone}`,
         body: messageText,
