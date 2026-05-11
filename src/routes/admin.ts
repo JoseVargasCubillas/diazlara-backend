@@ -4,7 +4,7 @@ import { leadApprovalController } from '../controllers/leadApprovalController';
 import { authenticateToken } from '../middleware/auth';
 import { AppError, ValidationError } from '../types';
 import { validationService } from '../services/ValidationService';
-
+import { roundRobinService } from '../services/RoundRobinService';
 const router = Router();
 
 /**
@@ -488,6 +488,136 @@ router.delete(
     }
   }
 );
+
+/**
+ * GET /api/admin/mis-leads
+ * El consultor ve solo sus leads asignados
+ */
+router.get('/mis-leads', authenticateToken, async (req, res, next) => {
+  try {
+    const consultorId = req.user?.sub;
+    const { getDatabase } = await import('../config/database');
+    const pool = await getDatabase();
+
+    const query = 'SELECT l.*, c.id AS cita_id, c.fecha_hora_inicio, c.fecha_hora_fin, c.meet_link, c.estado AS cita_estado FROM LEADS_EN_ESPERA l LEFT JOIN CLIENTES cli ON cli.email = l.email LEFT JOIN CITAS c ON c.cliente_id = cli.id AND c.consultor_id = ? AND c.estado IN (\'pendiente\',\'confirmada\') WHERE l.consultor_asignado_id = ? AND l.estado != \'rechazado\' ORDER BY l.fecha_asignacion ASC';
+
+ const [leads] = await pool.execute(query, [consultorId ?? '', consultorId ?? '']);
+
+
+    res.json({ 
+      success: true, 
+      data: leads,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/admin/mis-leads/:leadId/agendar
+ * El consultor elige fecha/hora para su lead
+ */
+router.post('/mis-leads/:leadId/agendar', authenticateToken, async (req, res, next) => {
+  try {
+    const consultorId = req.user?.sub;
+    const { leadId } = req.params;
+    const { fecha_hora_inicio, fecha_hora_fin, notas } = req.body;
+
+    if (!fecha_hora_inicio) {
+      res.status(400).json({ error: 'fecha_hora_inicio es requerido' });
+      return;  // ← separado
+    }
+
+    const { getDatabase } = await import('../config/database');
+    const pool = await getDatabase();
+
+    const [leadRows] = await pool.execute(
+      'SELECT * FROM LEADS_EN_ESPERA WHERE id = ? AND consultor_asignado_id = ?',
+      [leadId, consultorId ?? '']
+    );
+
+    if (!Array.isArray(leadRows) || leadRows.length === 0) {
+      res.status(403).json({ error: 'Este lead no está asignado a ti' });
+      return;  // ← separado
+    }
+
+    const result = await leadApprovalController.assignSessionToLead(leadId, {
+      consultor_id: consultorId!,
+      fecha_hora_inicio,
+      fecha_hora_fin,
+      notas_cliente: notas,
+    });
+
+    res.status(201).json({
+      success: true,
+      data: result,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/admin/mis-leads/:leadId/reasignar
+ * Reasignar un lead a otro consultor manualmente
+ */
+router.post('/mis-leads/:leadId/reasignar', authenticateToken, async (req, res, next) => {
+  try {
+    const { leadId } = req.params;
+    const { consultor_id } = req.body;
+
+    if (!consultor_id) {
+      res.status(400).json({ error: 'consultor_id es requerido' });
+      return;  // ← separado
+    }
+
+    await roundRobinService.reasignarLead(leadId, consultor_id);
+
+    res.json({
+      success: true,
+      message: 'Lead reasignado correctamente',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/admin/turnos
+ * Ver el estado de la cola de round-robin
+ */
+router.get('/turnos', authenticateToken, async (_req, res, next) => {
+  try {
+    const cola = await roundRobinService.verColaTurnos();
+    res.json({ 
+      success: true, 
+      data: cola,
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/admin/turnos/reset
+ * Resetear turnos
+ */
+router.post('/turnos/reset', authenticateToken, async (_req, res, next) => {
+  try {
+    await roundRobinService.resetearTurnos();
+    res.json({ 
+      success: true, 
+      message: 'Turnos reseteados correctamente',
+      timestamp: new Date().toISOString()
+    });
+  } catch (error) {
+    next(error);
+  }
+});
 
 export default router;
 

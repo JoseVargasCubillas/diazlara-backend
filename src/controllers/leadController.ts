@@ -2,6 +2,7 @@ import { getDatabase } from '../config/database';
 import { logger } from '../config/logger';
 import { LeadSubmissionRequest, ValidationError } from '../types';
 import { v4 as uuidv4 } from 'uuid';
+import { roundRobinService } from '../services/RoundRobinService';
 
 interface LeadWaitingResponse {
   id: string;
@@ -59,16 +60,25 @@ class LeadController {
         ]
       );
 
-      logger.info(`New lead in waiting list: ${leadId} (${leadData.email})`);
+logger.info(`New lead in waiting list: ${leadId} (${leadData.email})`);
 
-      return {
-        id: leadId,
-        nombre: leadData.nombre,
-        email: leadData.email,
-        estado: 'pendiente',
-        created_at: new Date(),
-        mensaje: 'Tu solicitud ha sido recibida. Un asesor se pondrá en contacto contigo pronto.',
-      };
+// ← AGREGA ESTO AQUÍ
+setImmediate(async () => {
+  try {
+    await roundRobinService.asignarConsultor(leadId);
+  } catch (err) {
+    logger.error('Error asignando consultor al lead:', err);
+  }
+});
+
+return {
+  id: leadId,
+  nombre: leadData.nombre,
+  email: leadData.email,
+  estado: 'pendiente',
+  created_at: new Date(),
+  mensaje: 'Tu solicitud ha sido recibida. Un asesor se pondrá en contacto contigo pronto.',
+};
     } catch (error) {
       const dbErrorCode = (error as { code?: string }).code;
 
