@@ -137,6 +137,7 @@ export class NotificationService {
       const cita = citaRows[0] as any;
 
       const variables = {
+        
         nombre: cita.nombre,
       };
 
