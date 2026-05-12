@@ -1,0 +1,11 @@
+✅ *Díaz Lara Consultores*
+
+Hola {{nombre}}, tu sesión estratégica está confirmada.
+
+📅 *Fecha:* {{fecha}}
+🕐 *Hora:* {{hora}} (hora de México)
+👤 *Consultor:* {{consultor}}
+
+🎥 *Enlace:* {{meet_link}}
+
+Duración: 15 minutos. Si necesitas reprogramar, responde este mensaje.

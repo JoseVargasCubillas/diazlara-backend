@@ -1,0 +1,3 @@
+❌ *Díaz Lara Consultores*
+
+Hola {{nombre}}, tu sesión ha sido cancelada. Si deseas reprogramar, responde este mensaje.

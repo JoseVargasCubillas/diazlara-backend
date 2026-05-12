@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Recordatorio · Díaz Lara Consultores</title>
+</head>
+<body style="margin:0;padding:0;background:#f5f1ea;font-family:'Segoe UI',Arial,Helvetica,sans-serif;color:#1a1f36;">
+  <table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f5f1ea;padding:32px 16px;">
+    <tr><td align="center">
+      <table role="presentation" width="600" cellpadding="0" cellspacing="0" style="max-width:600px;background:#ffffff;border-radius:14px;overflow:hidden;box-shadow:0 8px 28px rgba(20,30,60,0.10);">
+        <tr><td style="background:linear-gradient(135deg,#1a1f36 0%,#2a3460 100%);padding:32px 40px;text-align:center;">
+          <div style="font-size:11px;letter-spacing:4px;color:#c9a661;font-weight:700;text-transform:uppercase;">Recordatorio</div>
+          <div style="font-size:22px;color:#ffffff;font-weight:700;margin-top:10px;">Tu sesión es muy pronto</div>
+        </td></tr>
+        <tr><td style="padding:32px 40px;">
+          <p style="font-size:16px;line-height:1.6;margin:0 0 14px;">Hola <strong>{{nombre}}</strong>,</p>
+          <p style="font-size:15px;line-height:1.7;margin:0 0 24px;color:#3a4566;">
+            Te recordamos tu sesión estratégica con Díaz Lara Consultores hoy a las <strong>{{hora}}</strong> (hora de México).
+          </p>
+          <table role="presentation" cellpadding="0" cellspacing="0" align="center" style="margin:0 auto 24px;">
+            <tr><td style="background:#c9a661;border-radius:10px;box-shadow:0 4px 12px rgba(201,166,97,0.35);">
+              <a href="{{meet_link}}" target="_blank" style="display:inline-block;padding:14px 36px;color:#1a1f36;font-weight:700;font-size:15px;text-decoration:none;letter-spacing:0.4px;">
+                Unirme ahora
+              </a>
+            </td></tr>
+          </table>
+          <p style="font-size:12px;line-height:1.6;color:#6b7591;text-align:center;margin:0;">
+            Enlace directo: <span style="color:#1a1f36;word-break:break-all;font-weight:600;">{{meet_link}}</span>
+          </p>
+        </td></tr>
+        <tr><td style="background:#1a1f36;padding:18px 40px;text-align:center;">
+          <div style="font-size:12px;color:#c9a661;letter-spacing:2px;font-weight:700;">DÍAZ LARA CONSULTORES</div>
+        </td></tr>
+      </table>
+    </td></tr>
+  </table>
+</body>
+</html>

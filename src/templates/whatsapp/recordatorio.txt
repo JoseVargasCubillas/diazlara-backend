@@ -1,0 +1,5 @@
+⏰ *Recordatorio · Díaz Lara*
+
+Hola {{nombre}}, tu sesión es hoy a las *{{hora}}*.
+
+🎥 Enlace: {{meet_link}}

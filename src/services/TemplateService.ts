@@ -1,6 +1,31 @@
+import { promises as fs } from 'fs';
+import path from 'path';
 import { getDatabase } from '../config/database';
 import { logger } from '../config/logger';
 import { Plantilla, AppError } from '../types';
+
+// Templates shipped with the repo. Used as the default source so every
+// developer gets the latest design after `git pull` (no DB seed required).
+// Existing DB rows in PLANTILLAS only act as overrides — see resolveTemplate.
+const TEMPLATES_DIR = path.resolve(__dirname, '..', 'templates');
+
+const FILE_EXTENSIONS: Record<string, string> = {
+  email: '.html',
+  whatsapp: '.txt',
+};
+
+async function readTemplateFile(
+  canal: 'email' | 'whatsapp',
+  tipoEvento: string
+): Promise<string | null> {
+  const ext = FILE_EXTENSIONS[canal] || '.txt';
+  const file = path.join(TEMPLATES_DIR, canal, `${tipoEvento}${ext}`);
+  try {
+    return await fs.readFile(file, 'utf8');
+  } catch {
+    return null;
+  }
+}
 
 export class TemplateService {
   /**
@@ -47,7 +72,32 @@ export class TemplateService {
   }
 
   /**
-   * Load template from database and render with variables
+   * Resolve template content. File-based templates (src/templates/) take
+   * precedence so the design always matches the deployed code. The database
+   * is only consulted as a fallback (legacy behavior / runtime overrides).
+   */
+  private async resolveTemplate(
+    canal: 'email' | 'whatsapp',
+    tipoEvento: string
+  ): Promise<string | null> {
+    const fileContent = await readTemplateFile(canal, tipoEvento);
+    if (fileContent) {
+      return fileContent;
+    }
+
+    const dbTemplate = await this.getTemplate(canal, tipoEvento);
+    if (dbTemplate) {
+      logger.warn(
+        `No file template for ${canal}/${tipoEvento}; falling back to DB row`
+      );
+      return dbTemplate.contenido;
+    }
+
+    return null;
+  }
+
+  /**
+   * Render a template (file first, DB as fallback) with variable substitution.
    */
   async renderFromDatabase(
     canal: 'email' | 'whatsapp',
@@ -55,9 +105,9 @@ export class TemplateService {
     variables: Record<string, string>
   ): Promise<string> {
     try {
-      const template = await this.getTemplate(canal, tipoEvento);
+      const content = await this.resolveTemplate(canal, tipoEvento);
 
-      if (!template) {
+      if (!content) {
         throw new AppError(
           `Template not found: ${canal}/${tipoEvento}`,
           500,
@@ -65,7 +115,7 @@ export class TemplateService {
         );
       }
 
-      return this.renderTemplate(template.contenido, variables);
+      return this.renderTemplate(content, variables);
     } catch (error) {
       logger.error('Error rendering template:', error);
       throw error;
