@@ -38,7 +38,8 @@ export class NotificationService {
         consultor: cita.consultor_nombre,
         fecha,
         hora,
-        meet_link: cita.meet_link || 'https://meet.google.com',
+        meet_link: cita.meet_link || '',
+        subject: `Confirmación de tu sesión · Díaz Lara Consultores · ${fecha} ${hora}`,
       };
 
       // Send email
@@ -94,7 +95,8 @@ export class NotificationService {
       const variables = {
         nombre: cita.nombre,
         hora,
-        meet_link: cita.meet_link || 'https://meet.google.com',
+        meet_link: cita.meet_link || '',
+        subject: `Recordatorio · Tu sesión es hoy a las ${hora}`,
       };
 
       // Send WhatsApp reminder (preferred for close reminders)

@@ -1,14 +1,49 @@
-import sgMail from '@sendgrid/mail';
+import nodemailer, { Transporter } from 'nodemailer';
 import { env } from '../config/environment';
 import { logger } from '../config/logger';
 import { templateService } from './TemplateService';
 
-if (env.SENDGRID_API_KEY) {
-  sgMail.setApiKey(env.SENDGRID_API_KEY);
+let transporter: Transporter | null = null;
+
+function getTransporter(): Transporter | null {
+  if (transporter) return transporter;
+
+  if (!env.SMTP_HOST || !env.SMTP_USER || !env.SMTP_PASS) {
+    logger.warn('SMTP not configured: SMTP_HOST/SMTP_USER/SMTP_PASS missing');
+    return null;
+  }
+
+  transporter = nodemailer.createTransport({
+    host: env.SMTP_HOST,
+    port: env.SMTP_PORT,
+    secure: env.SMTP_SECURE, // true for 465, false for 587/STARTTLS
+    auth: {
+      user: env.SMTP_USER,
+      pass: env.SMTP_PASS,
+    },
+  });
+
+  // Async verify – do not block sending
+  transporter
+    .verify()
+    .then(() => logger.info(`✓ SMTP ready (${env.SMTP_HOST}:${env.SMTP_PORT})`))
+    .catch((err) => logger.error('SMTP verification failed:', err));
+
+  return transporter;
 }
+
+function stripHtml(html: string): string {
+  return html
+    .replace(/<style[\s\S]*?<\/style>/gi, '')
+    .replace(/<script[\s\S]*?<\/script>/gi, '')
+    .replace(/<[^>]+>/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 export class EmailService {
   /**
-   * Send email directly
+   * Send email directly via SMTP
    */
   async sendEmail(
     to: string,
@@ -17,30 +52,31 @@ export class EmailService {
     plainText?: string
   ): Promise<{ messageId: string; status: 'sent' | 'failed' }> {
     try {
-      const msg = {
+      const tx = getTransporter();
+      if (!tx) {
+        return { messageId: '', status: 'failed' };
+      }
+
+      const info = await tx.sendMail({
+        from: env.SMTP_FROM,
         to,
-        from: env.SENDGRID_FROM_EMAIL || 'noreply@diazlara.mx',
-        fromName: env.SENDGRID_FROM_NAME,
         subject,
-        text: plainText || htmlContent,
+        text: plainText || stripHtml(htmlContent),
         html: htmlContent,
-        replyTo: 'contacto@diazlara.mx',
-      };
+        replyTo: env.SMTP_REPLY_TO,
+        encoding: 'utf-8',
+        textEncoding: 'base64',
+      });
 
-      const [response] = await sgMail.send(msg);
-
-      logger.info(`Email sent to ${to}: ${response.headers['x-message-id']}`);
+      logger.info(`Email sent to ${to}: ${info.messageId}`);
 
       return {
-        messageId: (response.headers['x-message-id'] as string) || '',
+        messageId: info.messageId || '',
         status: 'sent',
       };
     } catch (error) {
       logger.error(`Failed to send email to ${to}:`, error);
-      return {
-        messageId: '',
-        status: 'failed',
-      };
+      return { messageId: '', status: 'failed' };
     }
   }
 
@@ -53,23 +89,18 @@ export class EmailService {
     variables: Record<string, string>
   ): Promise<{ messageId: string; status: 'sent' | 'failed' }> {
     try {
-      // Render template
       const htmlContent = await templateService.renderFromDatabase(
         'email',
         templateType,
         variables
       );
 
-      // Extract subject from first line or create default
       const subject = variables.subject || `Díaz Lara Consultores - ${templateType}`;
 
       return this.sendEmail(to, subject, htmlContent);
     } catch (error) {
       logger.error(`Failed to send template email to ${to}:`, error);
-      return {
-        messageId: '',
-        status: 'failed',
-      };
+      return { messageId: '', status: 'failed' };
     }
   }
 
@@ -83,38 +114,36 @@ export class EmailService {
     icsContent: string
   ): Promise<{ messageId: string; status: 'sent' | 'failed' }> {
     try {
-      const msg = {
+      const tx = getTransporter();
+      if (!tx) {
+        return { messageId: '', status: 'failed' };
+      }
+
+      const info = await tx.sendMail({
+        from: env.SMTP_FROM,
         to,
-        from: env.SENDGRID_FROM_EMAIL,
-        fromName: env.SENDGRID_FROM_NAME,
         subject,
+        text: stripHtml(htmlContent),
         html: htmlContent,
-        text: htmlContent,
-        replyTo: 'contacto@diazlara.mx',
+        replyTo: env.SMTP_REPLY_TO,
         attachments: [
           {
-            content: Buffer.from(icsContent).toString('base64'),
             filename: 'appointment.ics',
-            type: 'text/calendar',
-            disposition: 'attachment',
+            content: icsContent,
+            contentType: 'text/calendar; charset=utf-8; method=REQUEST',
           },
         ],
-      };
+      });
 
-      const [response] = await sgMail.send(msg);
-
-      logger.info(`Email with calendar sent to ${to}`);
+      logger.info(`Email with calendar sent to ${to}: ${info.messageId}`);
 
       return {
-        messageId: response.headers['x-message-id'] || '',
+        messageId: info.messageId || '',
         status: 'sent',
       };
     } catch (error) {
       logger.error(`Failed to send email with attachment to ${to}:`, error);
-      return {
-        messageId: '',
-        status: 'failed',
-      };
+      return { messageId: '', status: 'failed' };
     }
   }
 

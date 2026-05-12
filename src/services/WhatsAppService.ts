@@ -1,27 +1,58 @@
-import twilio from 'twilio';
+import axios, { AxiosInstance } from 'axios';
+import { v4 as uuidv4 } from 'uuid';
 import { env } from '../config/environment';
 import { logger } from '../config/logger';
 import { templateService } from './TemplateService';
 import { getDatabase } from '../config/database';
 
-let twilioClient: ReturnType<typeof twilio> | null = null;
+let whapiClient: AxiosInstance | null = null;
 
-const getTwilioClient = () => {
-  if (twilioClient) {
-    return twilioClient;
-  }
+function getClient(): AxiosInstance | null {
+  if (whapiClient) return whapiClient;
 
-  if (!env.TWILIO_ACCOUNT_SID || !env.TWILIO_AUTH_TOKEN) {
+  if (!env.WHAPI_TOKEN) {
+    logger.warn('Whapi not configured: WHAPI_TOKEN missing');
     return null;
   }
 
-  twilioClient = twilio(env.TWILIO_ACCOUNT_SID, env.TWILIO_AUTH_TOKEN);
-  return twilioClient;
-};
+  whapiClient = axios.create({
+    baseURL: env.WHAPI_URL,
+    headers: {
+      Authorization: `Bearer ${env.WHAPI_TOKEN}`,
+      'Content-Type': 'application/json',
+    },
+    timeout: 15000,
+  });
+
+  return whapiClient;
+}
+
+/**
+ * Whapi expects the recipient as `<digits>@s.whatsapp.net` (or full JID).
+ * Accept formats like "+5215512345678", "5215512345678", "5512345678".
+ * For Mexican mobile numbers (10 digits) we prefix with "521" — WhatsApp's
+ * mobile prefix for MX is "521", not just "52", and Whapi will mark the
+ * message as `pending` forever if the JID does not exist.
+ */
+function normalizeRecipient(rawPhone: string): string {
+  const digits = (rawPhone || '').replace(/\D/g, '');
+  if (!digits) return '';
+
+  let withCountry = digits;
+  if (withCountry.length === 10) {
+    // 10-digit local Mexican number → 521 + number
+    withCountry = `521${withCountry}`;
+  } else if (withCountry.length === 12 && withCountry.startsWith('52')) {
+    // 52 + 10 digits → insert mobile "1" → 521 + 10 digits
+    withCountry = `521${withCountry.slice(2)}`;
+  }
+
+  return `${withCountry}@s.whatsapp.net`;
+}
 
 export class WhatsAppService {
   /**
-   * Send WhatsApp message directly
+   * Send WhatsApp text message via Whapi
    */
   async sendMessage(
     toPhoneNumber: string,
@@ -29,44 +60,42 @@ export class WhatsAppService {
     citaId?: string
   ): Promise<{ sid: string; status: 'queued' | 'sent' | 'failed' }> {
     try {
-      const client = getTwilioClient();
-
-      if (!client || !env.TWILIO_WHATSAPP_NUMBER) {
-        logger.warn('WhatsApp service skipped: missing Twilio credentials');
-        return {
-          sid: '',
-          status: 'failed',
-        };
+      const client = getClient();
+      if (!client) {
+        return { sid: '', status: 'failed' };
       }
 
-      // Format phone number: +52 prefix
-      const formattedPhone = toPhoneNumber.startsWith('+')
-        ? toPhoneNumber
-        : `+${toPhoneNumber}`;
+      const to = normalizeRecipient(toPhoneNumber);
+      if (!to) {
+        logger.warn(`Invalid WhatsApp recipient: ${toPhoneNumber}`);
+        return { sid: '', status: 'failed' };
+      }
 
-      const message = await client.messages.create({
-        from: `whatsapp:${env.TWILIO_WHATSAPP_NUMBER}`,
-        to: `whatsapp:${formattedPhone}`,
+      const response = await client.post('/messages/text', {
+        to,
         body: messageText,
       });
 
-      logger.info(`WhatsApp message sent: ${message.sid} to ${toPhoneNumber}`);
+      const data = response.data || {};
+      const messageId: string =
+        data.message?.id || data.id || data.sent?.id || '';
 
-      // Log notification in database
+      logger.info(`WhatsApp message sent: ${messageId || '(no id)'} to ${toPhoneNumber}`);
+
       if (citaId) {
-        await this.logNotification(citaId, 'whatsapp', message.sid, messageText);
+        await this.logNotification(citaId, 'whatsapp', messageId, messageText);
       }
 
       return {
-        sid: message.sid,
-        status: 'queued',
+        sid: messageId,
+        status: data.sent === false ? 'failed' : 'sent',
       };
-    } catch (error) {
-      logger.error(`Failed to send WhatsApp to ${toPhoneNumber}:`, error);
-      return {
-        sid: '',
-        status: 'failed',
-      };
+    } catch (error: any) {
+      const detail = axios.isAxiosError(error)
+        ? error.response?.data || error.message
+        : error;
+      logger.error(`Failed to send WhatsApp to ${toPhoneNumber}:`, detail);
+      return { sid: '', status: 'failed' };
     }
   }
 
@@ -89,34 +118,20 @@ export class WhatsAppService {
       return this.sendMessage(toPhoneNumber, messageText, citaId);
     } catch (error) {
       logger.error(`Failed to send WhatsApp template to ${toPhoneNumber}:`, error);
-      return {
-        sid: '',
-        status: 'failed',
-      };
+      return { sid: '', status: 'failed' };
     }
   }
 
   /**
-   * Handle delivery status callback from Twilio
+   * Handle delivery status callback from Whapi.
+   * Whapi posts a payload with `statuses: [{ id, status, recipient_id, ... }]`.
    */
   async handleStatusCallback(eventData: any): Promise<void> {
     try {
-      const { MessageSid, MessageStatus } = eventData;
-
-      logger.info(`WhatsApp status update: ${MessageSid} -> ${MessageStatus}`);
-
-      // Map Twilio status to our status
-      // const statusMap: Record<string, string> = {
-      //   queued: 'pendiente',
-      //   sent: 'enviado',
-      //   delivered: 'enviado',
-      //   read: 'enviado',
-      //   failed: 'fallido',
-      //   undelivered: 'fallido',
-      // };
-
-      // TODO: Update notification status (would need to find notification by MessageSid)
-      // This would be implemented when we create the notification record with MessageSid
+      const statuses: any[] = eventData?.statuses || [];
+      for (const s of statuses) {
+        logger.info(`WhatsApp status update: ${s.id} -> ${s.status}`);
+      }
     } catch (error) {
       logger.error('Error handling WhatsApp status callback:', error);
     }
@@ -128,12 +143,11 @@ export class WhatsAppService {
   private async logNotification(
     citaId: string,
     canal: string,
-    _messageSid: string,
+    _messageId: string,
     contenido: string
   ): Promise<void> {
     try {
       const pool = await getDatabase();
-      const { v4: uuidv4 } = await import('uuid');
 
       await pool.execute(
         `INSERT INTO NOTIFICACIONES (id, cita_id, canal, tipo, estado, contenido, created_at)
@@ -146,10 +160,9 @@ export class WhatsAppService {
   }
 
   /**
-   * Validate phone number format
+   * Validate phone number format (México: 10 dígitos, opcional +52)
    */
   validatePhone(phone: string): boolean {
-    // México format: 5212345678 or +5212345678
     const phoneRegex = /^(\+?52)?[\d]{10}$/;
     return phoneRegex.test(phone.replace(/\s/g, ''));
   }

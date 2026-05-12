@@ -13,9 +13,19 @@ const app: Express = express();
 // Helmet: Set security HTTP headers
 app.use(helmet());
 
-// CORS Configuration
+// CORS Configuration (supports comma-separated list, e.g. "https://diazlara.mx,https://www.diazlara.mx")
+const rawCorsOrigins = process.env.CORS_ORIGIN || 'http://localhost:5173';
+const allowedOrigins = rawCorsOrigins.split(',').map((s) => s.trim()).filter(Boolean);
+
 const corsOptions = {
-  origin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  origin: (origin: string | undefined, cb: (err: Error | null, allow?: boolean) => void) => {
+    // Allow same-origin / non-browser requests with no Origin header
+    if (!origin) return cb(null, true);
+    if (allowedOrigins.includes('*') || allowedOrigins.includes(origin)) {
+      return cb(null, true);
+    }
+    return cb(new Error(`CORS: origin ${origin} not allowed`));
+  },
   credentials: true,
   optionsSuccessStatus: 200,
   methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],

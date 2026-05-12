@@ -85,9 +85,9 @@ class ConsultoriaIntegrationService {
   }
 
   /**
-   * Enviar zoom link a cliente en Consultoria
+   * Enviar link de Google Meet al cliente en Consultoria
    */
-  async sendZoomLinkToConsultoria(clienteId: number, zoomLink: string): Promise<any> {
+  async sendMeetLinkToConsultoria(clienteId: number, meetLink: string): Promise<any> {
     try {
       if (!this.apiKey) {
         throw new ValidationError(
@@ -97,8 +97,8 @@ class ConsultoriaIntegrationService {
       }
 
       const response = await axios.patch(
-        `${this.baseUrl}/api/clientes/${clienteId}/zoom-link`,
-        { zoomLink },
+        `${this.baseUrl}/api/clientes/${clienteId}/meet-link`,
+        { meetLink },
         {
           headers: {
             'Authorization': `Bearer ${this.apiKey}`,
@@ -108,15 +108,15 @@ class ConsultoriaIntegrationService {
         }
       );
 
-      logger.info(`Zoom link sent to Consultoria client ${clienteId}`);
+      logger.info(`Google Meet link sent to Consultoria client ${clienteId}`);
 
       return response.data;
     } catch (error) {
-      logger.error('Error sending zoom link to Consultoria:', error);
+      logger.error('Error sending Google Meet link to Consultoria:', error);
 
       if (axios.isAxiosError(error)) {
         throw new ValidationError(
-          'Error sending zoom link to Consultoria',
+          'Error sending Google Meet link to Consultoria',
           {
             consultoria: error.response?.data?.message || error.message,
           }

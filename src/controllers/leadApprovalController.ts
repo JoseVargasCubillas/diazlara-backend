@@ -16,9 +16,9 @@ interface RejectLeadRequest {
   motivo?: string;
 }
 
-interface SendZoomLinkRequest {
+interface SendMeetLinkRequest {
   leadId: string;
-  zoomLink: string;
+  meetLink: string;
 }
 
 class LeadApprovalController {
@@ -29,7 +29,7 @@ class LeadApprovalController {
 
       let query = `SELECT
           l.id, l.nombre, l.email, l.telefono_whatsapp, l.empresa, l.puesto,
-          l.servicios, l.estado, l.estatus_comercial, l.consultor_id, l.zoom_link,
+          l.servicios, l.estado, l.estatus_comercial, l.consultor_id, l.meet_link,
           l.consultoria_cliente_id, l.created_at, l.updated_at,
           c.id            AS cita_id,
           c.fecha_hora_inicio AS cita_fecha_hora_inicio,
@@ -129,8 +129,8 @@ class LeadApprovalController {
         estado: 'aprobado',
         consultoriaClienteId: syncResult?.clienteId,
         mensaje: syncResult
-          ? 'Lead aprobado y sincronizado con Consultoria. Puedes enviar el link de Zoom.'
-          : 'Lead aprobado. Puedes enviar el link de Zoom cuando esté listo.',
+          ? 'Lead aprobado y sincronizado con Consultoria. Puedes enviar el link de Google Meet.'
+          : 'Lead aprobado. Puedes enviar el link de Google Meet cuando esté listo.',
       };
     } catch (error) {
       logger.error('Error approving lead:', error);
@@ -173,14 +173,16 @@ class LeadApprovalController {
     }
   }
 
-  async sendZoomLink(data: SendZoomLinkRequest) {
+  async sendMeetLink(data: SendMeetLinkRequest) {
     try {
       const pool = await getDatabase();
 
-      // Validate zoom link format
-      if (!data.zoomLink || !data.zoomLink.includes('zoom.us')) {
-        throw new ValidationError('Invalid Zoom link', {
-          zoomLink: 'El link debe ser una URL válida de Zoom',
+      // Validate Google Meet link format
+      const meetLink = (data.meetLink || '').trim();
+      const isValidMeetUrl = /^https?:\/\/(meet\.google\.com|g\.co\/meet)\//i.test(meetLink);
+      if (!meetLink || !isValidMeetUrl) {
+        throw new ValidationError('Invalid Google Meet link', {
+          meetLink: 'El link debe ser una URL válida de Google Meet (https://meet.google.com/...)',
         });
       }
 
@@ -198,28 +200,43 @@ class LeadApprovalController {
 
       if (lead.estado !== 'aprobado') {
         throw new ValidationError(
-          'Can only send Zoom link to approved leads',
+          'Can only send Google Meet link to approved leads',
           { estado: 'El lead debe estar aprobado' }
         );
       }
 
-      // Update zoom link
+      // Update meet link
       await pool.execute(
         `UPDATE LEADS_EN_ESPERA
-         SET zoom_link = ?, updated_at = NOW()
+         SET meet_link = ?, updated_at = NOW()
          WHERE id = ?`,
-        [data.zoomLink, data.leadId]
+        [meetLink, data.leadId]
       );
 
-      logger.info(`Zoom link sent to lead: ${data.leadId}`);
+      // Best-effort sync with Consultoria platform
+      if (lead.consultoria_cliente_id) {
+        try {
+          await consultoriaIntegrationService.sendMeetLinkToConsultoria(
+            lead.consultoria_cliente_id,
+            meetLink
+          );
+        } catch (syncError) {
+          logger.warn(
+            `Could not propagate Google Meet link to Consultoria for lead ${data.leadId}:`,
+            syncError
+          );
+        }
+      }
+
+      logger.info(`Google Meet link sent to lead: ${data.leadId}`);
 
       return {
         id: data.leadId,
-        zoom_link: data.zoomLink,
-        mensaje: 'Link de Zoom enviado al cliente.',
+        meet_link: meetLink,
+        mensaje: 'Link de Google Meet enviado al cliente.',
       };
     } catch (error) {
-      logger.error('Error sending Zoom link:', error);
+      logger.error('Error sending Google Meet link:', error);
       throw error;
     }
   }

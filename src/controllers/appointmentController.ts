@@ -82,14 +82,24 @@ class AppointmentController {
       const consultant = consultorDetails[0] as any;
       const client = clientDetails[0] as any;
 
-      // Generate Google Meet link
-      const meetLink = await googleMeetService.generateMeetLink(
-        consultant.email,
-        client.email,
-        client.nombre,
-        startTime,
-        endTime
-      );
+      // Generate Google Meet link (best-effort: appointment is still booked
+      // even if the Meet integration is misconfigured; consultant will receive a
+      // warning in the logs and can attach a link manually).
+      let meetLink: string | null = null;
+      try {
+        meetLink = await googleMeetService.generateMeetLink(
+          consultant.email,
+          client.email,
+          client.nombre,
+          startTime,
+          endTime
+        );
+      } catch (meetErr) {
+        logger.warn(
+          `Could not create Google Meet link for new appointment (${client.email}): ` +
+            (meetErr as Error).message
+        );
+      }
 
       // Create appointment
       const citaId = uuidv4();
@@ -126,7 +136,7 @@ class AppointmentController {
         fecha_hora_inicio: startTime,
         fecha_hora_fin: endTime,
         estado: 'pendiente',
-        meet_link: meetLink,
+        meet_link: meetLink ?? undefined,
         notas_cliente: data.notas_cliente,
         created_at: new Date(),
       };
