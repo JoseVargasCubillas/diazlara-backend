@@ -1,7 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authController } from '../controllers/authController';
 import { leadApprovalController } from '../controllers/leadApprovalController';
-import { authenticateToken } from '../middleware/auth';
+import { authenticateToken, requireRole } from '../middleware/auth';
 import { AppError, ValidationError } from '../types';
 import { validationService } from '../services/ValidationService';
 
@@ -350,6 +350,7 @@ router.post(
 router.get(
   '/consultores',
   authenticateToken,
+  requireRole('super_admin'),
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await authController.listConsultores();
@@ -367,9 +368,10 @@ router.get(
 router.post(
   '/consultores',
   authenticateToken,
+  requireRole('super_admin'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
-      const { nombre, apellido, email, password, especialidad } = req.body;
+      const { nombre, apellido, email, password, especialidad, rol } = req.body;
 
       if (!nombre || !email || !password) {
         throw new ValidationError('nombre, email y password son requeridos', {
@@ -385,12 +387,18 @@ router.post(
         });
       }
 
+      if (rol && !['consultant', 'super_admin'].includes(rol)) {
+        throw new ValidationError('Rol inválido', {
+          rol: 'Debe ser consultant o super_admin',
+        });
+      }
+
       const emailValidation = validationService.validateLoginCredentials({ email, password });
       if (!emailValidation.valid && emailValidation.errors?.email) {
         throw new ValidationError('Email inválido', { email: emailValidation.errors.email });
       }
 
-      const result = await authController.registerConsultor({ nombre, apellido, email, password, especialidad });
+      const result = await authController.registerConsultor({ nombre, apellido, email, password, especialidad, rol });
 
       res.status(201).json({
         success: true,
@@ -410,6 +418,7 @@ router.post(
 router.patch(
   '/consultores/:id/toggle-activo',
   authenticateToken,
+  requireRole('super_admin'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;
@@ -434,6 +443,7 @@ router.patch(
 router.delete(
   '/consultores/:id',
   authenticateToken,
+  requireRole('super_admin'),
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { id } = req.params;

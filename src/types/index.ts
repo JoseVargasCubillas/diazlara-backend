@@ -24,6 +24,7 @@ export interface Consultor {
   apellido?: string;
   email: string;
   especialidad?: string;
+  rol: 'consultant' | 'super_admin';
   activo: boolean;
   password_hash?: string;
   api_token?: string;

@@ -1,7 +1,8 @@
 import dotenv from 'dotenv';
+import path from 'path';
 
 // Load environment variables
-dotenv.config();
+dotenv.config({ path: path.resolve(process.cwd(), '.env') });
 
 export function validateEnvironment(): void {
   const required = [
@@ -48,6 +49,7 @@ export const env = {
   GOOGLE_SERVICE_ACCOUNT_JSON: process.env.GOOGLE_SERVICE_ACCOUNT_JSON,
   GOOGLE_CALENDAR_ID: process.env.GOOGLE_CALENDAR_ID,
   GOOGLE_IMPERSONATE_USER: process.env.GOOGLE_IMPERSONATE_USER,
+  GOOGLE_MEET_EXTRA_ATTENDEES: process.env.GOOGLE_MEET_EXTRA_ATTENDEES,
   // SMTP (replaces SendGrid)
   SMTP_HOST: process.env.SMTP_HOST,
   SMTP_PORT: parseInt(process.env.SMTP_PORT || '587', 10),

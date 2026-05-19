@@ -15,7 +15,7 @@ class AuthController {
 
       // Get consultant by email
       const [rows] = await pool.execute(
-        `SELECT id, nombre, apellido, email, password_hash, especialidad, activo
+        `SELECT id, nombre, apellido, email, password_hash, especialidad, rol, activo
          FROM CONSULTORES
          WHERE email = ?`,
         [email]
@@ -46,7 +46,7 @@ class AuthController {
       const token = generateToken({
         sub: consultor.id,
         email: consultor.email,
-        role: 'consultant',
+        role: consultor.rol || 'consultant',
       });
 
       logger.info(`Consultant login successful: ${email}`);
@@ -59,6 +59,7 @@ class AuthController {
           apellido: consultor.apellido,
           email: consultor.email,
           especialidad: consultor.especialidad,
+          rol: consultor.rol || 'consultant',
         },
       };
     } catch (error) {
@@ -75,7 +76,7 @@ class AuthController {
       const pool = await getDatabase();
 
       const [rows] = await pool.execute(
-        `SELECT id, nombre, apellido, email, especialidad, activo, created_at
+        `SELECT id, nombre, apellido, email, especialidad, rol, activo, created_at
          FROM CONSULTORES
          WHERE id = ?`,
         [consultorId]
@@ -193,7 +194,7 @@ class AuthController {
     try {
       const pool = await getDatabase();
       const [rows] = await pool.execute(
-        `SELECT id, nombre, apellido, email, especialidad, activo, created_at
+        `SELECT id, nombre, apellido, email, especialidad, rol, activo, created_at
          FROM CONSULTORES ORDER BY created_at DESC`
       );
       return (Array.isArray(rows) ? rows : []) as Partial<Consultor>[];
@@ -212,6 +213,7 @@ class AuthController {
     email: string;
     password: string;
     especialidad?: string;
+    rol?: 'consultant' | 'super_admin';
   }): Promise<Partial<Consultor>> {
     try {
       const pool = await getDatabase();
@@ -231,8 +233,8 @@ class AuthController {
       const hash = await bcrypt.hash(data.password, 12);
 
       await pool.execute(
-        `INSERT INTO CONSULTORES (id, nombre, apellido, email, password_hash, especialidad, activo, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, 1, NOW())`,
+        `INSERT INTO CONSULTORES (id, nombre, apellido, email, password_hash, especialidad, rol, activo, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, 1, NOW())`,
         [
           id,
           data.nombre.trim(),
@@ -240,6 +242,7 @@ class AuthController {
           data.email.trim().toLowerCase(),
           hash,
           data.especialidad?.trim() || null,
+          data.rol || 'consultant',
         ]
       );
 
@@ -251,6 +254,7 @@ class AuthController {
         apellido: data.apellido,
         email: data.email.trim().toLowerCase(),
         especialidad: data.especialidad,
+        rol: data.rol || 'consultant',
         activo: true,
       };
     } catch (error) {

@@ -12,9 +12,6 @@ import { notificationService } from '../services/NotificationService';
 import { googleMeetService } from '../services/GoogleMeetService';
 
 class AppointmentController {
-  /**
-   * Create a new appointment
-   */
   async createAppointment(
     clientId: string,
     data: AppointmentBookingRequest
@@ -27,7 +24,6 @@ class AppointmentController {
         'SELECT id FROM CLIENTES WHERE id = ?',
         [clientId]
       );
-
       if (!Array.isArray(clientRows) || clientRows.length === 0) {
         throw new NotFoundError('Client not found');
       }
@@ -37,12 +33,10 @@ class AppointmentController {
         'SELECT id FROM CONSULTORES WHERE id = ? AND activo = 1',
         [data.consultor_id]
       );
-
       if (!Array.isArray(consultorRows) || consultorRows.length === 0) {
         throw new NotFoundError('Consultant not found');
       }
 
-      // Check slot availability
       const startTime = new Date(data.fecha_hora_inicio);
       const endTime = new Date(data.fecha_hora_fin);
 
@@ -51,7 +45,6 @@ class AppointmentController {
         startTime,
         endTime
       );
-
       if (!isAvailable) {
         throw new ConflictError('Time slot is not available', {
           consultorId: data.consultor_id,
@@ -60,12 +53,11 @@ class AppointmentController {
         });
       }
 
-      // Get consultant and client details for Google Meet
+      // Consultant and client details for Google Meet
       const [consultorDetails] = await pool.execute(
         'SELECT email, nombre FROM CONSULTORES WHERE id = ?',
         [data.consultor_id]
       );
-
       const [clientDetails] = await pool.execute(
         'SELECT email, nombre FROM CLIENTES WHERE id = ?',
         [clientId]
@@ -74,7 +66,6 @@ class AppointmentController {
       if (!Array.isArray(consultorDetails) || consultorDetails.length === 0) {
         throw new NotFoundError('Consultant details not found');
       }
-
       if (!Array.isArray(clientDetails) || clientDetails.length === 0) {
         throw new NotFoundError('Client details not found');
       }
@@ -82,9 +73,7 @@ class AppointmentController {
       const consultant = consultorDetails[0] as any;
       const client = clientDetails[0] as any;
 
-      // Generate Google Meet link (best-effort: appointment is still booked
-      // even if the Meet integration is misconfigured; consultant will receive a
-      // warning in the logs and can attach a link manually).
+      // Generate Google Meet link — log the FULL error if it fails
       let meetLink: string | null = null;
       try {
         meetLink = await googleMeetService.generateMeetLink(
@@ -94,16 +83,15 @@ class AppointmentController {
           startTime,
           endTime
         );
-      } catch (meetErr) {
-        logger.warn(
-          `Could not create Google Meet link for new appointment (${client.email}): ` +
-            (meetErr as Error).message
+      } catch (meetErr: any) {
+        // Log error completo para diagnóstico — ya NO se traga en silencio
+        logger.error(
+          `[GoogleMeet] No se pudo generar el enlace de Meet para ${client.email}: ${meetErr?.message || meetErr}`
         );
+        logger.error('[GoogleMeet] Revisa: GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_CALENDAR_ID y que el calendario esté compartido con el service account como Editor.');
       }
 
-      // Create appointment
       const citaId = uuidv4();
-
       await pool.execute(
         `INSERT INTO CITAS
          (id, cliente_id, consultor_id, fecha_hora_inicio, fecha_hora_fin, estado, meet_link, notas_cliente, created_at)
@@ -119,16 +107,18 @@ class AppointmentController {
         ]
       );
 
-      logger.info(`Appointment created: ${citaId}`);
+      if (meetLink) {
+        logger.info(`Cita ${citaId} creada con Meet link: ${meetLink}`);
+      } else {
+        logger.warn(`Cita ${citaId} creada SIN Meet link — agrega el enlace manualmente.`);
+      }
 
-      // Send confirmation notifications (async, don't wait)
       setImmediate(() => {
         notificationService.sendConfirmationNotification(citaId).catch((err) => {
           logger.error('Failed to send confirmation notification:', err);
         });
       });
 
-      // Return created appointment
       return {
         id: citaId,
         cliente_id: clientId,
@@ -146,43 +136,24 @@ class AppointmentController {
     }
   }
 
-  /**
-   * Get appointment by ID
-   */
   async getAppointment(citaId: string): Promise<Cita | null> {
     try {
       const pool = await getDatabase();
-
-      const [rows] = await pool.execute(
-        'SELECT * FROM CITAS WHERE id = ?',
-        [citaId]
-      );
-
-      if (Array.isArray(rows) && rows.length > 0) {
-        return rows[0] as Cita;
-      }
-
-      return null;
+      const [rows] = await pool.execute('SELECT * FROM CITAS WHERE id = ?', [citaId]);
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] as Cita : null;
     } catch (error) {
       logger.error('Error retrieving appointment:', error);
       throw error;
     }
   }
 
-  /**
-   * Get appointments for a client
-   */
   async getClientAppointments(clientId: string): Promise<Cita[]> {
     try {
       const pool = await getDatabase();
-
       const [rows] = await pool.execute(
-        `SELECT * FROM CITAS
-         WHERE cliente_id = ?
-         ORDER BY fecha_hora_inicio DESC`,
+        'SELECT * FROM CITAS WHERE cliente_id = ? ORDER BY fecha_hora_inicio DESC',
         [clientId]
       );
-
       return Array.isArray(rows) ? (rows as Cita[]) : [];
     } catch (error) {
       logger.error('Error retrieving client appointments:', error);
@@ -190,9 +161,6 @@ class AppointmentController {
     }
   }
 
-  /**
-   * Get appointments for a consultant
-   */
   async getConsultantAppointments(
     consultorId: string,
     from?: Date,
@@ -200,19 +168,14 @@ class AppointmentController {
   ): Promise<Cita[]> {
     try {
       const pool = await getDatabase();
-
       let query = 'SELECT * FROM CITAS WHERE consultor_id = ?';
       const params: any[] = [consultorId];
-
       if (from && to) {
         query += ' AND fecha_hora_inicio >= ? AND fecha_hora_fin <= ?';
         params.push(from, to);
       }
-
       query += ' ORDER BY fecha_hora_inicio ASC';
-
       const [rows] = await pool.execute(query, params);
-
       return Array.isArray(rows) ? (rows as Cita[]) : [];
     } catch (error) {
       logger.error('Error retrieving consultant appointments:', error);
@@ -220,32 +183,18 @@ class AppointmentController {
     }
   }
 
-  /**
-   * Update appointment status
-   */
   async updateAppointmentStatus(
     citaId: string,
     estado: 'pendiente' | 'confirmada' | 'completada' | 'cancelada' | 'no_show'
   ): Promise<Cita | null> {
     try {
       const pool = await getDatabase();
-
-      // Get current appointment
       const cita = await this.getAppointment(citaId);
+      if (!cita) throw new NotFoundError('Appointment not found');
 
-      if (!cita) {
-        throw new NotFoundError('Appointment not found');
-      }
-
-      // Update status
-      await pool.execute(
-        'UPDATE CITAS SET estado = ? WHERE id = ?',
-        [estado, citaId]
-      );
-
+      await pool.execute('UPDATE CITAS SET estado = ? WHERE id = ?', [estado, citaId]);
       logger.info(`Appointment status updated: ${citaId} -> ${estado}`);
 
-      // Send notifications based on status change
       if (estado === 'cancelada') {
         setImmediate(() => {
           notificationService.sendCancellationNotification(citaId).catch((err) => {
@@ -267,9 +216,6 @@ class AppointmentController {
     }
   }
 
-  /**
-   * Cancel appointment
-   */
   async cancelAppointment(citaId: string): Promise<void> {
     try {
       await this.updateAppointmentStatus(citaId, 'cancelada');

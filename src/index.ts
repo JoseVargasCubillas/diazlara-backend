@@ -16,6 +16,11 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const server = app.listen(PORT, () => {
   logger.info(`✓ Server running on http://localhost:${PORT}`);
   logger.info(`✓ Environment: ${process.env.NODE_ENV}`);
+  logger.info({
+    googleCalendarId: process.env.GOOGLE_CALENDAR_ID,
+    googleImpersonateUser: process.env.GOOGLE_IMPERSONATE_USER,
+    googleMeetExtraAttendees: process.env.GOOGLE_MEET_EXTRA_ATTENDEES,
+  }, '[Startup] Google Calendar configuration loaded');
 
   // Start appointment scheduler
   appointmentScheduler.start();
