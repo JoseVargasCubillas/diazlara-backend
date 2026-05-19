@@ -2,11 +2,11 @@
   "name": "diazlara-backend",
   "version": "1.0.0",
   "description": "Backend API for Díaz Lara Consultores appointment booking system",
-  "main": "app.js",
+  "main": "server.js",
   "scripts": {
     "dev": "nodemon --exec ts-node src/index.ts",
     "build": "tsc && node scripts/copy-templates.js",
-    "start": "node app.js",
+    "start": "node server.js",
     "migrate": "ts-node src/database/migration.ts",
     "seed:templates": "ts-node scripts/seed-templates.ts",
     "test": "jest",
