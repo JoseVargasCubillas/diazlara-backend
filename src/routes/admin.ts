@@ -1,6 +1,7 @@
 import { Router, Request, Response, NextFunction } from 'express';
 import { authController } from '../controllers/authController';
 import { leadApprovalController } from '../controllers/leadApprovalController';
+import { diagnosticoController } from '../controllers/diagnosticoController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { AppError, ValidationError } from '../types';
 import { validationService } from '../services/ValidationService';
@@ -241,6 +242,128 @@ router.get(
         success: true,
         data: clientArray,
         count: clientArray.length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/admin/clientes-consultor/:clientId/diagnostico
+ * Get the strategic diagnostic form for a manually added client.
+ */
+router.get(
+  '/clientes-consultor/:clientId/diagnostico',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const diagnostico = await diagnosticoController.getDiagnostico(
+        'cliente_consultor',
+        req.params.clientId,
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      res.json({
+        success: true,
+        data: diagnostico,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PUT /api/admin/clientes-consultor/:clientId/diagnostico
+ * Save the strategic diagnostic form for a manually added client.
+ */
+router.put(
+  '/clientes-consultor/:clientId/diagnostico',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const diagnostico = await diagnosticoController.saveDiagnostico(
+        'cliente_consultor',
+        req.params.clientId,
+        req.body || {},
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      res.json({
+        success: true,
+        data: diagnostico,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/admin/historico-clientes/:historicoId/diagnostico
+ * Get the strategic diagnostic form for an archived client.
+ */
+router.get(
+  '/historico-clientes/:historicoId/diagnostico',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const diagnostico = await diagnosticoController.getDiagnostico(
+        'historico_cliente',
+        req.params.historicoId,
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      res.json({
+        success: true,
+        data: diagnostico,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PUT /api/admin/historico-clientes/:historicoId/diagnostico
+ * Save the strategic diagnostic form for an archived client.
+ */
+router.put(
+  '/historico-clientes/:historicoId/diagnostico',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const diagnostico = await diagnosticoController.saveDiagnostico(
+        'historico_cliente',
+        req.params.historicoId,
+        req.body || {},
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      res.json({
+        success: true,
+        data: diagnostico,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {

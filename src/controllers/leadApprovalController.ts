@@ -677,6 +677,27 @@ class LeadApprovalController {
         ]
       );
 
+      await connection.execute(
+        `INSERT INTO DIAGNOSTICOS_CLIENTES (
+           id, cliente_ref_tipo, cliente_ref_id, consultor_id, estado, respuestas,
+           resumen, saved_at, completed_at, created_by, updated_by
+         )
+         SELECT UUID(), 'historico_cliente', ?, consultor_id, estado, respuestas,
+                resumen, saved_at, completed_at, created_by, updated_by
+         FROM DIAGNOSTICOS_CLIENTES
+         WHERE cliente_ref_tipo = 'cliente_consultor'
+           AND cliente_ref_id = ?
+         ON DUPLICATE KEY UPDATE
+           consultor_id = VALUES(consultor_id),
+           estado = VALUES(estado),
+           respuestas = VALUES(respuestas),
+           resumen = VALUES(resumen),
+           saved_at = VALUES(saved_at),
+           completed_at = VALUES(completed_at),
+           updated_by = VALUES(updated_by)`,
+        [historicoId, clientId]
+      );
+
       await connection.execute('UPDATE CLIENTES_CONSULTOR SET activo = 0 WHERE id = ?', [clientId]);
       await connection.commit();
 
