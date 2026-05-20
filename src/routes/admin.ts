@@ -190,6 +190,117 @@ router.get(
 );
 
 /**
+ * GET /api/admin/historico-clientes
+ * List archived clients/leads.
+ * Query: ?etiqueta=cliente_removido&limit=50
+ */
+router.get(
+  '/historico-clientes',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const etiqueta = req.query.etiqueta as string | undefined;
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+
+      const historico = await leadApprovalController.listClientHistory(limit, etiqueta);
+      const historicoArray = Array.isArray(historico) ? historico : [];
+
+      res.json({
+        success: true,
+        data: historicoArray,
+        count: historicoArray.length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/admin/clientes-consultor
+ * List manually added clients. Super admins see all, consultants see their own.
+ */
+router.get(
+  '/clientes-consultor',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
+      const clients = await leadApprovalController.listManualClients(
+        consultorId,
+        req.user?.role === 'super_admin',
+        limit
+      );
+      const clientArray = Array.isArray(clients) ? clients : [];
+
+      res.json({
+        success: true,
+        data: clientArray,
+        count: clientArray.length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/clientes-consultor
+ * Add a non-organic/manual client assigned to a consultant.
+ */
+router.post(
+  '/clientes-consultor',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const result = await leadApprovalController.createManualClient(
+        req.body || {},
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      res.status(201).json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/admin/clientes-consultor/:clientId
+ * Archive a manually added client into HISTORICO_CLIENTES.
+ */
+router.delete(
+  '/clientes-consultor/:clientId',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { clientId } = req.params;
+      const result = await leadApprovalController.archiveManualClient(clientId, {
+        etiqueta: req.body?.etiqueta || req.query.etiqueta as string | undefined,
+        motivo: req.body?.motivo || req.query.motivo as string | undefined,
+        archivedBy: req.user?.sub,
+      });
+      res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * POST /api/admin/leads-espera/:leadId/asignar-sesion
  * Assign a session manually to a lead
  */
@@ -483,7 +594,7 @@ router.post(
 
 /**
  * DELETE /api/admin/leads-espera/:leadId
- * Permanently delete a lead from the waiting list
+ * Archive a lead/client into HISTORICO_CLIENTES and remove it from active tables.
  */
 router.delete(
   '/leads-espera/:leadId',
@@ -491,7 +602,11 @@ router.delete(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { leadId } = req.params;
-      const result = await leadApprovalController.deleteLeadCompletely(leadId);
+      const result = await leadApprovalController.archiveLeadToHistory(leadId, {
+        etiqueta: req.body?.etiqueta || req.query.etiqueta as string | undefined,
+        motivo: req.body?.motivo || req.query.motivo as string | undefined,
+        archivedBy: req.user?.sub,
+      });
       res.json({ success: true, data: result, timestamp: new Date().toISOString() });
     } catch (error) {
       next(error);
