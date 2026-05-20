@@ -4,6 +4,15 @@ import { emailService } from './EmailService';
 import { whatsAppService } from './WhatsAppService';
 import { format } from 'date-fns';
 import { es } from 'date-fns/locale';
+import { v4 as uuidv4 } from 'uuid';
+
+type ReminderHours = 24 | 1;
+type ReminderNotificationType = 'recordatorio' | 'recordatorio_1h';
+
+const ACTIVE_APPOINTMENT_STATES = ['pendiente', 'confirmada'];
+
+const reminderTypeFor = (hoursBeforeAppointment: ReminderHours): ReminderNotificationType =>
+  hoursBeforeAppointment === 1 ? 'recordatorio_1h' : 'recordatorio';
 
 export class NotificationService {
   /**
@@ -71,9 +80,10 @@ export class NotificationService {
   /**
    * Send reminder 24 hours before appointment
    */
-  async sendReminderNotification(citaId: string, hoursBeforeAppointment: 24 | 1 = 24): Promise<void> {
+  async sendReminderNotification(citaId: string, hoursBeforeAppointment: ReminderHours = 24): Promise<void> {
     try {
       const pool = await getDatabase();
+      const notificationType = reminderTypeFor(hoursBeforeAppointment);
 
       const [citaRows] = await pool.execute(
         `SELECT c.*, cl.nombre, cl.email, cl.telefono_whatsapp,
@@ -81,8 +91,8 @@ export class NotificationService {
          FROM CITAS c
          JOIN CLIENTES cl ON c.cliente_id = cl.id
          JOIN CONSULTORES co ON c.consultor_id = co.id
-         WHERE c.id = ? AND c.estado IN ('pendiente', 'confirmada')`,
-        [citaId]
+         WHERE c.id = ? AND c.estado IN (?, ?)`,
+        [citaId, ...ACTIVE_APPOINTMENT_STATES]
       );
 
       if (!Array.isArray(citaRows) || citaRows.length === 0) {
@@ -99,13 +109,29 @@ export class NotificationService {
         subject: `Recordatorio · Tu sesión es hoy a las ${hora}`,
       };
 
+      if (cita.email) {
+        const emailResult = await emailService.sendFromTemplate(
+          cita.email,
+          'recordatorio',
+          variables
+        );
+        await this.logNotification(
+          citaId,
+          'email',
+          notificationType,
+          emailResult.status === 'sent' ? 'enviado' : 'fallido',
+          `Email reminder ${hoursBeforeAppointment}h`
+        );
+      }
+
       // Send WhatsApp reminder (preferred for close reminders)
       if (cita.telefono_whatsapp) {
         await whatsAppService.sendFromTemplate(
           cita.telefono_whatsapp,
           'recordatorio',
           variables,
-          citaId
+          citaId,
+          notificationType
         );
       }
 
@@ -216,13 +242,14 @@ export class NotificationService {
       // Get appointments that need 24h reminder (within next 24-25 hours)
       const [citasFor24h] = await pool.execute(
         `SELECT id FROM CITAS
-         WHERE estado IN ('pendiente', 'confirmada')
+         WHERE estado IN (?, ?)
          AND DATE_ADD(NOW(), INTERVAL 23 HOUR) < fecha_hora_inicio
          AND DATE_ADD(NOW(), INTERVAL 25 HOUR) > fecha_hora_inicio
          AND id NOT IN (
            SELECT DISTINCT cita_id FROM NOTIFICACIONES
-           WHERE tipo = 'recordatorio' AND DATEDIFF(created_at, NOW()) <= 1
-         )`
+           WHERE tipo = 'recordatorio' AND created_at > DATE_SUB(NOW(), INTERVAL 2 DAY)
+         )`,
+        ACTIVE_APPOINTMENT_STATES
       );
 
       for (const row of (citasFor24h as any[])) {
@@ -232,13 +259,14 @@ export class NotificationService {
       // Get appointments that need 1h reminder (within next 55min-65min)
       const [citasFor1h] = await pool.execute(
         `SELECT id FROM CITAS
-         WHERE estado IN ('pendiente', 'confirmada')
+         WHERE estado IN (?, ?)
          AND DATE_ADD(NOW(), INTERVAL 55 MINUTE) < fecha_hora_inicio
          AND DATE_ADD(NOW(), INTERVAL 65 MINUTE) > fecha_hora_inicio
          AND id NOT IN (
            SELECT DISTINCT cita_id FROM NOTIFICACIONES
-           WHERE tipo = 'recordatorio_1h' AND DATEDIFF(created_at, NOW()) < 1
-         )`
+           WHERE tipo = 'recordatorio_1h' AND created_at > DATE_SUB(NOW(), INTERVAL 2 DAY)
+         )`,
+        ACTIVE_APPOINTMENT_STATES
       );
 
       for (const row of (citasFor1h as any[])) {
@@ -268,6 +296,25 @@ export class NotificationService {
       logger.info(`Retrying ${(failedNotifs as any[]).length} failed notifications`);
     } catch (error) {
       logger.error('Error retrying failed notifications:', error);
+    }
+  }
+
+  private async logNotification(
+    citaId: string,
+    canal: 'email' | 'whatsapp',
+    tipo: ReminderNotificationType,
+    estado: 'enviado' | 'fallido',
+    contenido: string
+  ): Promise<void> {
+    try {
+      const pool = await getDatabase();
+      await pool.execute(
+        `INSERT INTO NOTIFICACIONES (id, cita_id, canal, tipo, estado, contenido, enviado_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [uuidv4(), citaId, canal, tipo, estado, contenido, estado === 'enviado' ? new Date() : null]
+      );
+    } catch (error) {
+      logger.error('Error logging notification:', error);
     }
   }
 }

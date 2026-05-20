@@ -7,6 +7,9 @@ import { getDatabase } from '../config/database';
 
 let whapiClient: AxiosInstance | null = null;
 
+type WhatsAppTemplateType = 'confirmacion' | 'recordatorio' | 'seguimiento' | 'cancelacion';
+type NotificationType = WhatsAppTemplateType | 'recordatorio_1h';
+
 function getClient(): AxiosInstance | null {
   if (whapiClient) return whapiClient;
 
@@ -57,17 +60,24 @@ export class WhatsAppService {
   async sendMessage(
     toPhoneNumber: string,
     messageText: string,
-    citaId?: string
+    citaId?: string,
+    notificationType: NotificationType = 'confirmacion'
   ): Promise<{ sid: string; status: 'queued' | 'sent' | 'failed' }> {
     try {
       const client = getClient();
       if (!client) {
+        if (citaId) {
+          await this.logNotification(citaId, 'whatsapp', '', notificationType, 'fallido', messageText);
+        }
         return { sid: '', status: 'failed' };
       }
 
       const to = normalizeRecipient(toPhoneNumber);
       if (!to) {
         logger.warn(`Invalid WhatsApp recipient: ${toPhoneNumber}`);
+        if (citaId) {
+          await this.logNotification(citaId, 'whatsapp', '', notificationType, 'fallido', messageText);
+        }
         return { sid: '', status: 'failed' };
       }
 
@@ -83,7 +93,14 @@ export class WhatsAppService {
       logger.info(`WhatsApp message sent: ${messageId || '(no id)'} to ${toPhoneNumber}`);
 
       if (citaId) {
-        await this.logNotification(citaId, 'whatsapp', messageId, messageText);
+        await this.logNotification(
+          citaId,
+          'whatsapp',
+          messageId,
+          notificationType,
+          data.sent === false ? 'fallido' : 'enviado',
+          messageText
+        );
       }
 
       return {
@@ -95,6 +112,9 @@ export class WhatsAppService {
         ? error.response?.data || error.message
         : error;
       logger.error(`Failed to send WhatsApp to ${toPhoneNumber}:`, detail);
+      if (citaId) {
+        await this.logNotification(citaId, 'whatsapp', '', notificationType, 'fallido', messageText);
+      }
       return { sid: '', status: 'failed' };
     }
   }
@@ -104,9 +124,10 @@ export class WhatsAppService {
    */
   async sendFromTemplate(
     toPhoneNumber: string,
-    templateType: 'confirmacion' | 'recordatorio' | 'seguimiento' | 'cancelacion',
+    templateType: WhatsAppTemplateType,
     variables: Record<string, string>,
-    citaId: string
+    citaId: string,
+    notificationType: NotificationType = templateType
   ): Promise<{ sid: string; status: 'queued' | 'sent' | 'failed' }> {
     try {
       const messageText = await templateService.renderFromDatabase(
@@ -115,7 +136,7 @@ export class WhatsAppService {
         variables
       );
 
-      return this.sendMessage(toPhoneNumber, messageText, citaId);
+      return this.sendMessage(toPhoneNumber, messageText, citaId, notificationType);
     } catch (error) {
       logger.error(`Failed to send WhatsApp template to ${toPhoneNumber}:`, error);
       return { sid: '', status: 'failed' };
@@ -144,15 +165,17 @@ export class WhatsAppService {
     citaId: string,
     canal: string,
     _messageId: string,
+    tipo: NotificationType,
+    estado: 'enviado' | 'fallido',
     contenido: string
   ): Promise<void> {
     try {
       const pool = await getDatabase();
 
       await pool.execute(
-        `INSERT INTO NOTIFICACIONES (id, cita_id, canal, tipo, estado, contenido, created_at)
-         VALUES (?, ?, ?, ?, ?, ?, NOW())`,
-        [uuidv4(), citaId, canal, 'confirmacion', 'enviado', contenido]
+        `INSERT INTO NOTIFICACIONES (id, cita_id, canal, tipo, estado, contenido, enviado_at, created_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, NOW())`,
+        [uuidv4(), citaId, canal, tipo, estado, contenido, estado === 'enviado' ? new Date() : null]
       );
     } catch (error) {
       logger.error('Error logging notification:', error);

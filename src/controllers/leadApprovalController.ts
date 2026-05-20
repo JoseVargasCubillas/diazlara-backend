@@ -354,6 +354,52 @@ class LeadApprovalController {
     }
   }
 
+  async deleteLeadCompletely(leadId: string) {
+    const pool = await getDatabase();
+    const connection = await pool.getConnection();
+
+    try {
+      await connection.beginTransaction();
+
+      const [leadRows] = await connection.execute(
+        'SELECT id, email FROM LEADS_EN_ESPERA WHERE id = ?',
+        [leadId]
+      );
+
+      if (!Array.isArray(leadRows) || leadRows.length === 0) {
+        throw new ValidationError('Lead not found', { leadId: 'Lead does not exist' });
+      }
+
+      const lead = leadRows[0] as any;
+
+      await connection.execute('DELETE FROM LEADS_EN_ESPERA WHERE id = ?', [leadId]);
+      const [clientDeleteResult] = await connection.execute(
+        'DELETE FROM CLIENTES WHERE email = ?',
+        [lead.email]
+      );
+
+      await connection.commit();
+
+      const deletedClients = Number((clientDeleteResult as any).affectedRows || 0);
+      logger.info(`Lead deleted completely: ${leadId}; related clients deleted: ${deletedClients}`);
+
+      return {
+        leadId,
+        email: lead.email,
+        deletedClients,
+        mensaje: deletedClients > 0
+          ? 'Lead, cliente relacionado, citas y notificaciones eliminados.'
+          : 'Lead eliminado. No habia cliente relacionado.',
+      };
+    } catch (error) {
+      await connection.rollback();
+      logger.error('Error deleting lead completely:', error);
+      throw error;
+    } finally {
+      connection.release();
+    }
+  }
+
   private async ensureClientFromLead(lead: any): Promise<string> {
     const pool = await getDatabase();
 

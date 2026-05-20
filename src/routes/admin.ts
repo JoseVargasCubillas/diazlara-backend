@@ -491,10 +491,8 @@ router.delete(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       const { leadId } = req.params;
-      const { getDatabase } = await import('../config/database');
-      const pool = await getDatabase();
-      await pool.execute('DELETE FROM LEADS_EN_ESPERA WHERE id = ?', [leadId]);
-      res.json({ success: true, timestamp: new Date().toISOString() });
+      const result = await leadApprovalController.deleteLeadCompletely(leadId);
+      res.json({ success: true, data: result, timestamp: new Date().toISOString() });
     } catch (error) {
       next(error);
     }
