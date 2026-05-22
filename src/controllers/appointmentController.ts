@@ -95,7 +95,7 @@ class AppointmentController {
       await pool.execute(
         `INSERT INTO CITAS
          (id, cliente_id, consultor_id, fecha_hora_inicio, fecha_hora_fin, estado, meet_link, notas_cliente, created_at)
-         VALUES (?, ?, ?, ?, ?, 'pendiente', ?, ?, NOW())`,
+         VALUES (?, ?, ?, ?, ?, 'agendada', ?, ?, NOW())`,
         [
           citaId,
           clientId,
@@ -125,7 +125,7 @@ class AppointmentController {
         consultor_id: data.consultor_id,
         fecha_hora_inicio: startTime,
         fecha_hora_fin: endTime,
-        estado: 'pendiente',
+        estado: 'agendada',
         meet_link: meetLink ?? undefined,
         notas_cliente: data.notas_cliente,
         created_at: new Date(),
@@ -185,7 +185,7 @@ class AppointmentController {
 
   async updateAppointmentStatus(
     citaId: string,
-    estado: 'pendiente' | 'confirmada' | 'completada' | 'cancelada' | 'no_show'
+    estado: 'pendiente' | 'agendada' | 'confirmada' | 'completada' | 'cancelada' | 'no_show'
   ): Promise<Cita | null> {
     try {
       const pool = await getDatabase();

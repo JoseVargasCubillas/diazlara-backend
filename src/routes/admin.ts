@@ -219,6 +219,35 @@ router.get(
 );
 
 /**
+ * POST /api/admin/historico-clientes/:historicoId/restaurar
+ * Restore an archived manual client back to active clients.
+ */
+router.post(
+  '/historico-clientes/:historicoId/restaurar',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const restored = await leadApprovalController.restoreManualClientFromHistory(
+        req.params.historicoId,
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      res.json({
+        success: true,
+        data: restored,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * GET /api/admin/clientes-consultor
  * List manually added clients. Super admins see all, consultants see their own.
  */
@@ -242,6 +271,53 @@ router.get(
         success: true,
         data: clientArray,
         count: clientArray.length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/admin/servicios-clientes
+ * List service tags available for clients.
+ */
+router.get(
+  '/servicios-clientes',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const includeInactive = req.query.includeInactive === 'true';
+      const services = await leadApprovalController.listClientServices(includeInactive);
+      const serviceArray = Array.isArray(services) ? services : [];
+
+      res.json({
+        success: true,
+        data: serviceArray,
+        count: serviceArray.length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/servicios-clientes
+ * Create or reactivate a client service tag.
+ */
+router.post(
+  '/servicios-clientes',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const service = await leadApprovalController.createClientService(req.body?.nombre);
+
+      res.status(201).json({
+        success: true,
+        data: service,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
@@ -391,6 +467,157 @@ router.post(
       );
 
       res.status(201).json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PATCH /api/admin/clientes-consultor/:clientId
+ * Update a manually added client and its service tags.
+ */
+router.patch(
+  '/clientes-consultor/:clientId',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const result = await leadApprovalController.updateManualClient(
+        req.params.clientId,
+        req.body || {},
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      res.json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/admin/clientes-consultor/:clientId/archivos
+ * List files stored locally for a client.
+ */
+router.get(
+  '/clientes-consultor/:clientId/archivos',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const files = await leadApprovalController.listManualClientFiles(
+        req.params.clientId,
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+      const fileArray = Array.isArray(files) ? files : [];
+
+      res.json({
+        success: true,
+        data: fileArray,
+        count: fileArray.length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/clientes-consultor/:clientId/archivos
+ * Upload one or more files to local VPS storage.
+ * Form field: archivo. Optional field: campo; defaults to archivos_extras.
+ */
+router.post(
+  '/clientes-consultor/:clientId/archivos',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const files = await leadApprovalController.uploadManualClientFile(
+        req.params.clientId,
+        req,
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      res.status(201).json({
+        success: true,
+        data: files,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/admin/clientes-consultor/:clientId/archivos/:fileId
+ * Download a locally stored client file.
+ */
+router.get(
+  '/clientes-consultor/:clientId/archivos/:fileId',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const file = await leadApprovalController.getManualClientFile(
+        req.params.clientId,
+        req.params.fileId,
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      if (file.mime_type) {
+        res.setHeader('Content-Type', file.mime_type);
+      }
+      res.download(file.absolutePath, file.nombre_original);
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/admin/clientes-consultor/:clientId/archivos/:fileId
+ * Delete a locally stored client file.
+ */
+router.delete(
+  '/clientes-consultor/:clientId/archivos/:fileId',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const result = await leadApprovalController.deleteManualClientFile(
+        req.params.clientId,
+        req.params.fileId,
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      res.json({
         success: true,
         data: result,
         timestamp: new Date().toISOString(),

@@ -116,7 +116,7 @@ router.patch('/:id', async (req: Request, res: Response, next: NextFunction) => 
       throw new AppError('estado is required', 400);
     }
 
-    const validStates = ['pendiente', 'confirmada', 'completada', 'cancelada', 'no_show'];
+    const validStates = ['pendiente', 'agendada', 'confirmada', 'completada', 'cancelada', 'no_show'];
 
     if (!validStates.includes(estado)) {
       throw new AppError(`Invalid estado. Must be one of: ${validStates.join(', ')}`, 400);

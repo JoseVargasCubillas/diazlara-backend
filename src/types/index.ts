@@ -54,7 +54,7 @@ export interface Cita {
   consultor_id: string;
   fecha_hora_inicio: Date;
   fecha_hora_fin: Date;
-  estado: 'pendiente' | 'confirmada' | 'completada' | 'cancelada' | 'no_show';
+  estado: 'pendiente' | 'agendada' | 'confirmada' | 'completada' | 'cancelada' | 'no_show';
   meet_link?: string;
   notas_cliente?: string;
   created_at: Date;

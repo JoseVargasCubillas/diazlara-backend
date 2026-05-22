@@ -9,7 +9,7 @@ import { v4 as uuidv4 } from 'uuid';
 type ReminderHours = 24 | 1;
 type ReminderNotificationType = 'recordatorio' | 'recordatorio_1h';
 
-const ACTIVE_APPOINTMENT_STATES = ['pendiente', 'confirmada'];
+const ACTIVE_APPOINTMENT_STATES = ['pendiente', 'agendada', 'confirmada'];
 
 const reminderTypeFor = (hoursBeforeAppointment: ReminderHours): ReminderNotificationType =>
   hoursBeforeAppointment === 1 ? 'recordatorio_1h' : 'recordatorio';

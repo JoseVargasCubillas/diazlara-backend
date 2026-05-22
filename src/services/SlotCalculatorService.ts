@@ -54,7 +54,7 @@ export class SlotCalculatorService {
         `SELECT fecha_hora_inicio, fecha_hora_fin FROM CITAS
          WHERE consultor_id = ?
          AND DATE(fecha_hora_inicio) = DATE(?)
-         AND estado IN ('pendiente', 'confirmada')`,
+         AND estado IN ('pendiente', 'agendada', 'confirmada')`,
         [consultorId, fecha]
       );
 
@@ -124,7 +124,7 @@ export class SlotCalculatorService {
       const [citasRows] = await pool.execute(
         `SELECT id FROM CITAS
          WHERE consultor_id = ?
-         AND estado IN ('pendiente', 'confirmada')
+         AND estado IN ('pendiente', 'agendada', 'confirmada')
          AND fecha_hora_inicio < ?
          AND fecha_hora_fin > ?`,
         [consultorId, endTime, startTime]
