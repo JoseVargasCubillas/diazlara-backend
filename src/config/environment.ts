@@ -65,6 +65,7 @@ export const env = {
   HUBSPOT_PRIVATE_APP_TOKEN: process.env.HUBSPOT_PRIVATE_APP_TOKEN,
   HUBSPOT_PORTAL_ID: process.env.HUBSPOT_PORTAL_ID,
   CORS_ORIGIN: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  TRUST_PROXY: process.env.TRUST_PROXY || (process.env.NODE_ENV === 'production' ? '1' : 'false'),
   LOG_LEVEL: process.env.LOG_LEVEL || 'info',
   LOG_FILE: process.env.LOG_FILE || 'logs/app.log',
 };

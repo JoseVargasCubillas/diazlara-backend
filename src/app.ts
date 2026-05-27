@@ -3,8 +3,17 @@ import cors from 'cors';
 import helmet from 'helmet';
 import rateLimit from 'express-rate-limit';
 import { logger } from './config/logger';
+import { env } from './config/environment';
 
 const app: Express = express();
+
+const trustProxy = env.TRUST_PROXY === 'true'
+  ? true
+  : env.TRUST_PROXY === 'false'
+    ? false
+    : Number(env.TRUST_PROXY);
+
+app.set('trust proxy', Number.isNaN(trustProxy) ? env.TRUST_PROXY : trustProxy);
 
 // ============================================================
 // Security Middleware
