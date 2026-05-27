@@ -12,6 +12,7 @@ export interface Cliente {
   puesto?: string;
   origen: 'web' | 'masterclass' | 'referido';
   estatus_comercial: LeadBusinessStatus;
+  client_status?: string;
   created_at: Date;
 }
 

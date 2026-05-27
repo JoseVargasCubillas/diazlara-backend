@@ -56,7 +56,7 @@ export const env = {
   SMTP_SECURE: (process.env.SMTP_SECURE || 'false').toLowerCase() === 'true',
   SMTP_USER: process.env.SMTP_USER,
   SMTP_PASS: process.env.SMTP_PASS,
-  SMTP_FROM: process.env.SMTP_FROM || process.env.SMTP_USER || 'no-reply@diazlara.mx',
+  SMTP_FROM: process.env.SMTP_FROM || `"DL Sistema" <${process.env.SMTP_USER || 'no-reply@diazlara.mx'}>`,
   SMTP_REPLY_TO: process.env.SMTP_REPLY_TO || 'contacto@diazlara.mx',
   // Whapi (replaces Twilio for WhatsApp)
   WHAPI_TOKEN: process.env.WHAPI_TOKEN,

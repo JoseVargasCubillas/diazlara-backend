@@ -2,6 +2,7 @@ import { getDatabase } from '../config/database';
 import { logger } from '../config/logger';
 import { LeadSubmissionRequest, ValidationError } from '../types';
 import { v4 as uuidv4 } from 'uuid';
+import { CLIENT_STATUS_DEFAULT } from '../constants/clientStatus';
 
 interface LeadWaitingResponse {
   id: string;
@@ -99,8 +100,8 @@ class LeadController {
     const clientId = uuidv4();
 
     await pool.execute(
-      `INSERT INTO CLIENTES (id, nombre, email, telefono_whatsapp, empresa, puesto, origen, estatus_comercial, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 'interesado', NOW())`,
+      `INSERT INTO CLIENTES (id, nombre, email, telefono_whatsapp, empresa, puesto, origen, estatus_comercial, client_status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 'interesado', ?, NOW())`,
       [
         clientId,
         leadData.nombre,
@@ -109,6 +110,7 @@ class LeadController {
         leadData.empresa || null,
         leadData.puesto || null,
         leadData.origen || 'web',
+        CLIENT_STATUS_DEFAULT,
       ]
     );
 

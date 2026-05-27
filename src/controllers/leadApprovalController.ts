@@ -7,6 +7,7 @@ import path from 'path';
 import { v4 as uuidv4 } from 'uuid';
 import { consultoriaIntegrationService } from '../services/ConsultoriaIntegrationService';
 import { appointmentController } from './appointmentController';
+import { CLIENT_STATUS_DEFAULT, CLIENT_STATUS_OPTIONS, ClientStatus, isClientStatus } from '../constants/clientStatus';
 
 const formidable = require('formidable');
 
@@ -74,6 +75,7 @@ interface ManualClientRequest {
   expediente?: string;
   fecha_sesion_1?: string;
   fecha_sesion_2?: string;
+  sesiones?: string[];
   observaciones?: string;
   comentarios?: string;
   benchmark?: string;
@@ -83,11 +85,20 @@ interface ManualClientRequest {
   ct?: string;
   comentarios_ct?: string;
   status?: string;
+  client_status?: ClientStatus;
   factura_1?: string;
   factura_2?: string;
   estatus_comercial?: string;
   notas?: string;
   consultor_id?: string;
+}
+
+interface ClientConsultantAssignmentRequest {
+  consultor_id: string;
+  servicio_id?: string;
+  servicio_nombre?: string;
+  etapa?: string;
+  notas?: string;
 }
 
 const MANUAL_CLIENT_MUTABLE_FIELDS = [
@@ -120,6 +131,7 @@ const MANUAL_CLIENT_MUTABLE_FIELDS = [
   'expediente',
   'fecha_sesion_1',
   'fecha_sesion_2',
+  'sesiones',
   'observaciones',
   'comentarios',
   'benchmark',
@@ -129,6 +141,7 @@ const MANUAL_CLIENT_MUTABLE_FIELDS = [
   'ct',
   'comentarios_ct',
   'status',
+  'client_status',
   'factura_1',
   'factura_2',
   'estatus_comercial',
@@ -605,7 +618,7 @@ class LeadApprovalController {
           ene, feb, mar, abr, may, jun, jul, ago, sep, oct, nov, dic, saldo,
           expediente, fecha_sesion_1, fecha_sesion_2, observaciones, comentarios,
           benchmark, revision_financiera, minuta, candidato, ct, comentarios_ct,
-          status, factura_1, factura_2, etiqueta, motivo, estado_lead, estado_cita,
+          status, client_status, factura_1, factura_2, etiqueta, motivo, estado_lead, estado_cita,
           estatus_comercial, meet_link, fecha_hora_inicio, fecha_hora_fin,
           archived_by, archived_at
         FROM HISTORICO_CLIENTES`;
@@ -676,9 +689,37 @@ class LeadApprovalController {
       });
   }
 
+  private normalizeSessions(value: unknown): string[] {
+    if (!Array.isArray(value)) return [];
+    const seen = new Set<string>();
+    return value
+      .map((item) => this.normalizeString(item))
+      .filter((item): item is string => {
+        if (!item || seen.has(item)) return false;
+        seen.add(item);
+        return true;
+      });
+  }
+
   private normalizeManualClientValue(field: string, value: unknown) {
+    if (field === 'client_status') {
+      return this.normalizeClientStatus(value);
+    }
+
     if (field === 'servicios') {
       return this.toJsonOrNull(this.normalizeServices(value));
+    }
+
+    if (field === 'sesiones') {
+      return this.toJsonOrNull(this.normalizeSessions(value));
+    }
+
+    if (field === 'fuente_registro') {
+      return this.normalizeString(value) || 'manual_consultor';
+    }
+
+    if (field === 'empresa') {
+      return this.normalizeString(value) || 'NA';
     }
 
     if (MONEY_FIELDS.has(field)) {
@@ -686,6 +727,22 @@ class LeadApprovalController {
     }
 
     return this.normalizeString(value);
+  }
+
+  private normalizeClientStatus(value: unknown): ClientStatus {
+    const cleanValue = this.normalizeString(value);
+
+    if (!cleanValue) {
+      return CLIENT_STATUS_DEFAULT;
+    }
+
+    if (!isClientStatus(cleanValue)) {
+      throw new ValidationError('Invalid client status', {
+        client_status: `El status debe ser uno de: ${CLIENT_STATUS_OPTIONS.join(', ')}`,
+      });
+    }
+
+    return cleanValue;
   }
 
   private async syncServiceCatalog(pool: any, servicios: string[]) {
@@ -735,6 +792,194 @@ class LeadApprovalController {
     }
   }
 
+  async listCommercialAdvisors(includeInactive: boolean = false) {
+    try {
+      const pool = await getDatabase();
+      const query = includeInactive
+        ? 'SELECT id, nombre, activo, created_at, updated_at FROM ASESORES_COMERCIALES ORDER BY nombre ASC'
+        : 'SELECT id, nombre, activo, created_at, updated_at FROM ASESORES_COMERCIALES WHERE activo = 1 ORDER BY nombre ASC';
+      const [rows] = await pool.execute(query);
+      return rows || [];
+    } catch (error) {
+      logger.error('Error listing commercial advisors:', error);
+      throw error;
+    }
+  }
+
+  async createCommercialAdvisor(nombre: string) {
+    try {
+      const pool = await getDatabase();
+      const cleanName = this.normalizeString(nombre);
+
+      if (!cleanName) {
+        throw new ValidationError('nombre is required', { nombre: 'Required' });
+      }
+
+      await pool.execute(
+        `INSERT INTO ASESORES_COMERCIALES (nombre, activo)
+         VALUES (?, 1)
+         ON DUPLICATE KEY UPDATE activo = 1, updated_at = NOW()`,
+        [cleanName]
+      );
+
+      const [rows] = await pool.execute(
+        'SELECT id, nombre, activo, created_at, updated_at FROM ASESORES_COMERCIALES WHERE nombre = ? LIMIT 1',
+        [cleanName]
+      );
+
+      return Array.isArray(rows) && rows.length > 0 ? rows[0] : { nombre: cleanName, activo: 1 };
+    } catch (error) {
+      logger.error('Error creating commercial advisor:', error);
+      throw error;
+    }
+  }
+
+  async listClientConsultantAssignments(clientId: string) {
+    try {
+      const pool = await getDatabase();
+      await this.ensureManualClientExists(clientId, true);
+
+      const [rows] = await pool.execute(
+        `SELECT
+           a.id, a.cliente_manual_id, a.consultor_id, a.servicio_id, a.etapa,
+           a.notas, a.activo, a.created_by, a.created_at, a.updated_at,
+           c.nombre AS consultor_nombre, c.apellido AS consultor_apellido, c.email AS consultor_email,
+           s.nombre AS servicio_nombre
+         FROM CLIENTE_CONSULTOR_ASIGNACIONES a
+         JOIN CONSULTORES c ON c.id = a.consultor_id
+         LEFT JOIN SERVICIOS_CLIENTE s ON s.id = a.servicio_id
+         WHERE a.cliente_manual_id = ? AND a.activo = 1
+         ORDER BY a.created_at DESC`,
+        [clientId]
+      );
+
+      return rows || [];
+    } catch (error) {
+      logger.error('Error listing client consultant assignments:', error);
+      throw error;
+    }
+  }
+
+  async createClientConsultantAssignment(
+    clientId: string,
+    data: ClientConsultantAssignmentRequest,
+    currentConsultorId: string
+  ) {
+    try {
+      const pool = await getDatabase();
+      await this.ensureManualClientExists(clientId, true);
+
+      const consultorId = this.normalizeString(data.consultor_id);
+      if (!consultorId) {
+        throw new ValidationError('consultor_id is required', { consultor_id: 'Required' });
+      }
+
+      await this.ensureConsultorExists(consultorId);
+      const servicioId = await this.resolveServiceId(pool, data.servicio_id, data.servicio_nombre);
+      const assignmentId = uuidv4();
+
+      await pool.execute(
+        `INSERT INTO CLIENTE_CONSULTOR_ASIGNACIONES (
+           id, cliente_manual_id, consultor_id, servicio_id, etapa, notas, created_by
+         )
+         VALUES (?, ?, ?, ?, ?, ?, ?)`,
+        [
+          assignmentId,
+          clientId,
+          consultorId,
+          servicioId,
+          this.normalizeString(data.etapa) || this.normalizeString(data.servicio_nombre),
+          this.normalizeString(data.notas),
+          currentConsultorId,
+        ]
+      );
+
+      const assignments = await this.listClientConsultantAssignments(clientId);
+      return (assignments as any[]).find((item) => item.id === assignmentId) || { id: assignmentId };
+    } catch (error) {
+      logger.error('Error creating client consultant assignment:', error);
+      throw error;
+    }
+  }
+
+  async updateClientConsultantAssignment(
+    clientId: string,
+    assignmentId: string,
+    data: Partial<ClientConsultantAssignmentRequest>
+  ) {
+    try {
+      const pool = await getDatabase();
+      await this.ensureManualClientExists(clientId, true);
+
+      const assignments: string[] = [];
+      const values: any[] = [];
+
+      if (Object.prototype.hasOwnProperty.call(data, 'consultor_id')) {
+        const consultorId = this.normalizeString(data.consultor_id);
+        if (!consultorId) {
+          throw new ValidationError('consultor_id is required', { consultor_id: 'Required' });
+        }
+        await this.ensureConsultorExists(consultorId);
+        assignments.push('consultor_id = ?');
+        values.push(consultorId);
+      }
+
+      if (
+        Object.prototype.hasOwnProperty.call(data, 'servicio_id') ||
+        Object.prototype.hasOwnProperty.call(data, 'servicio_nombre')
+      ) {
+        assignments.push('servicio_id = ?');
+        values.push(await this.resolveServiceId(pool, data.servicio_id, data.servicio_nombre));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(data, 'etapa')) {
+        assignments.push('etapa = ?');
+        values.push(this.normalizeString(data.etapa));
+      }
+
+      if (Object.prototype.hasOwnProperty.call(data, 'notas')) {
+        assignments.push('notas = ?');
+        values.push(this.normalizeString(data.notas));
+      }
+
+      if (assignments.length === 0) {
+        const current = await this.listClientConsultantAssignments(clientId);
+        return (current as any[]).find((item) => item.id === assignmentId) || { id: assignmentId };
+      }
+
+      values.push(clientId, assignmentId);
+      await pool.execute(
+        `UPDATE CLIENTE_CONSULTOR_ASIGNACIONES
+         SET ${assignments.join(', ')}, updated_at = NOW()
+         WHERE cliente_manual_id = ? AND id = ? AND activo = 1`,
+        values
+      );
+
+      const updated = await this.listClientConsultantAssignments(clientId);
+      return (updated as any[]).find((item) => item.id === assignmentId) || { id: assignmentId };
+    } catch (error) {
+      logger.error('Error updating client consultant assignment:', error);
+      throw error;
+    }
+  }
+
+  async deleteClientConsultantAssignment(clientId: string, assignmentId: string) {
+    try {
+      const pool = await getDatabase();
+      await this.ensureManualClientExists(clientId, true);
+      await pool.execute(
+        `UPDATE CLIENTE_CONSULTOR_ASIGNACIONES
+         SET activo = 0, updated_at = NOW()
+         WHERE cliente_manual_id = ? AND id = ?`,
+        [clientId, assignmentId]
+      );
+      return { id: assignmentId, cliente_manual_id: clientId, activo: 0 };
+    } catch (error) {
+      logger.error('Error deleting client consultant assignment:', error);
+      throw error;
+    }
+  }
+
   private getClientFilesRoot(): string {
     return path.resolve(process.env.CLIENT_FILES_DIR || path.join(process.cwd(), 'uploads', 'clientes'));
   }
@@ -745,6 +990,8 @@ class LeadApprovalController {
     isSuperAdmin: boolean,
     requireActive: boolean = true
   ) {
+    void currentConsultorId;
+    void isSuperAdmin;
     const pool = await getDatabase();
     const activeClause = requireActive ? 'AND activo = 1' : '';
     const [clientRows] = await pool.execute(
@@ -758,11 +1005,61 @@ class LeadApprovalController {
     }
 
     const client = clientRows[0] as any;
-    if (!isSuperAdmin && client.consultor_id !== currentConsultorId) {
+    return client;
+  }
+
+  private async ensureManualClientExists(clientId: string, requireActive: boolean = true) {
+    const pool = await getDatabase();
+    const activeClause = requireActive ? 'AND activo = 1' : '';
+    const [clientRows] = await pool.execute(
+      `SELECT id FROM CLIENTES_CONSULTOR WHERE id = ? ${activeClause}`,
+      [clientId]
+    );
+
+    if (!Array.isArray(clientRows) || clientRows.length === 0) {
       throw new ValidationError('Manual client not found', { clientId: 'Client does not exist' });
     }
 
-    return client;
+    return clientRows[0] as any;
+  }
+
+  private async ensureConsultorExists(consultorId: string) {
+    const pool = await getDatabase();
+    const [rows] = await pool.execute(
+      'SELECT id FROM CONSULTORES WHERE id = ? AND activo = 1',
+      [consultorId]
+    );
+
+    if (!Array.isArray(rows) || rows.length === 0) {
+      throw new ValidationError('Consultor not found', { consultor_id: 'Consultor does not exist' });
+    }
+  }
+
+  private async resolveServiceId(pool: any, serviceId?: string, serviceName?: string): Promise<string | null> {
+    const cleanId = this.normalizeString(serviceId);
+    if (cleanId) {
+      const [rows] = await pool.execute(
+        'SELECT id FROM SERVICIOS_CLIENTE WHERE id = ? AND activo = 1 LIMIT 1',
+        [cleanId]
+      );
+
+      if (!Array.isArray(rows) || rows.length === 0) {
+        throw new ValidationError('Service not found', { servicio_id: 'Service does not exist' });
+      }
+
+      return cleanId;
+    }
+
+    const cleanName = this.normalizeString(serviceName);
+    if (!cleanName) return null;
+
+    await this.syncServiceCatalog(pool, [cleanName]);
+    const [rows] = await pool.execute(
+      'SELECT id FROM SERVICIOS_CLIENTE WHERE nombre = ? LIMIT 1',
+      [cleanName]
+    );
+
+    return Array.isArray(rows) && rows.length > 0 ? (rows[0] as any).id : null;
   }
 
   private normalizeFormValue(value: unknown): string | null {
@@ -946,6 +1243,7 @@ class LeadApprovalController {
       }
 
       const servicios = this.normalizeServices(data.servicios || []);
+      const sesiones = this.normalizeSessions(data.sesiones || []);
       await this.syncServiceCatalog(pool, servicios);
 
       await pool.execute(
@@ -953,12 +1251,12 @@ class LeadApprovalController {
            id, no_cliente, consultor_id, nombre, apellido, email, telefono_whatsapp,
            empresa, asesor_comercial, evento_previo, puesto, servicios, fuente_registro,
            fecha_registro, importe_total, ene, feb, mar, abr, may, jun, jul, ago, sep,
-           oct, nov, dic, saldo, expediente, fecha_sesion_1, fecha_sesion_2,
+           oct, nov, dic, saldo, expediente, fecha_sesion_1, fecha_sesion_2, sesiones,
           observaciones, comentarios, benchmark, revision_financiera, minuta,
-          candidato, ct, comentarios_ct, status, factura_1, factura_2,
+          candidato, ct, comentarios_ct, status, client_status, factura_1, factura_2,
           estatus_comercial, notas, created_by
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           clientId,
           this.normalizeString(data.no_cliente),
@@ -967,7 +1265,7 @@ class LeadApprovalController {
           this.normalizeString(data.apellido),
           String(data.email).trim(),
           this.normalizeString(data.telefono_whatsapp),
-          this.normalizeString(data.empresa),
+          this.normalizeString(data.empresa) || 'NA',
           this.normalizeString(data.asesor_comercial),
           this.normalizeString(data.evento_previo),
           this.normalizeString(data.puesto),
@@ -989,8 +1287,9 @@ class LeadApprovalController {
           this.normalizeMoney(data.dic),
           this.normalizeMoney(data.saldo),
           this.normalizeString(data.expediente),
-          this.normalizeString(data.fecha_sesion_1),
-          this.normalizeString(data.fecha_sesion_2),
+          this.normalizeString(data.fecha_sesion_1) || sesiones[0] || null,
+          this.normalizeString(data.fecha_sesion_2) || sesiones[1] || null,
+          this.toJsonOrNull(sesiones),
           this.normalizeString(data.observaciones),
           this.normalizeString(data.comentarios),
           this.normalizeString(data.benchmark),
@@ -1000,6 +1299,7 @@ class LeadApprovalController {
           this.normalizeString(data.ct),
           this.normalizeString(data.comentarios_ct),
           this.normalizeString(data.status),
+          this.normalizeClientStatus(data.client_status),
           this.normalizeString(data.factura_1),
           this.normalizeString(data.factura_2),
           this.normalizeString(data.estatus_comercial) || 'prospecto',
@@ -1010,33 +1310,53 @@ class LeadApprovalController {
 
       logger.info(`Manual consultant client created: ${clientId} by ${currentConsultorId}`);
 
-      return { id: clientId, consultor_id: consultorId, ...data, servicios };
+      return {
+        id: clientId,
+        consultor_id: consultorId,
+        ...data,
+        empresa: this.normalizeString(data.empresa) || 'NA',
+        fuente_registro: this.normalizeString(data.fuente_registro) || 'manual_consultor',
+        client_status: this.normalizeClientStatus(data.client_status),
+        sesiones,
+        servicios,
+      };
     } catch (error) {
       logger.error('Error creating manual client:', error);
       throw error;
     }
   }
 
-  async listManualClients(currentConsultorId: string, isSuperAdmin: boolean = false, limit: number = 50) {
+  async listManualClients(
+    currentConsultorId: string,
+    isSuperAdmin: boolean = false,
+    limit: number = 50,
+    clientStatus?: string
+  ) {
     try {
       const pool = await getDatabase();
       const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
-      const params: string[] = [];
+      const params: any[] = [];
       let query = `SELECT
           cc.*, c.nombre AS consultor_nombre, c.apellido AS consultor_apellido, c.email AS consultor_email
         FROM CLIENTES_CONSULTOR cc
         JOIN CONSULTORES c ON c.id = cc.consultor_id
         WHERE cc.activo = 1`;
+      void currentConsultorId;
+      void isSuperAdmin;
 
-      if (!isSuperAdmin) {
-        query += ' AND cc.consultor_id = ?';
-        params.push(currentConsultorId);
+      if (clientStatus) {
+        query += ' AND cc.client_status = ?';
+        params.push(this.normalizeClientStatus(clientStatus));
       }
 
       query += ` ORDER BY cc.created_at DESC LIMIT ${safeLimit}`;
 
       const [rows] = await pool.execute(query, params);
-      return rows || [];
+      const clients = Array.isArray(rows) ? rows as any[] : [];
+      return Promise.all(clients.map(async (client) => ({
+        ...client,
+        consultor_asignaciones: await this.listClientConsultantAssignments(client.id),
+      })));
     } catch (error) {
       logger.error('Error listing manual clients:', error);
       throw error;
@@ -1062,9 +1382,7 @@ class LeadApprovalController {
       }
 
       const existingClient = clientRows[0] as any;
-      if (!isSuperAdmin && existingClient.consultor_id !== currentConsultorId) {
-        throw new ValidationError('Manual client not found', { clientId: 'Client does not exist' });
-      }
+      void currentConsultorId;
 
       const assignments: string[] = [];
       const values: any[] = [];
@@ -1112,6 +1430,20 @@ class LeadApprovalController {
     }
   }
 
+  async updateManualClientStatus(
+    clientId: string,
+    clientStatus: unknown,
+    currentConsultorId: string,
+    isSuperAdmin: boolean = false
+  ) {
+    return this.updateManualClient(
+      clientId,
+      { client_status: this.normalizeClientStatus(clientStatus) },
+      currentConsultorId,
+      isSuperAdmin
+    );
+  }
+
   async archiveManualClient(clientId: string, data: ArchiveLeadRequest = {}) {
     const pool = await getDatabase();
     const connection = await pool.getConnection();
@@ -1138,13 +1470,13 @@ class LeadApprovalController {
            tipo_origen, fuente_registro, fecha_registro, nombre, email, telefono_whatsapp,
            empresa, asesor_comercial, evento_previo, puesto, servicios, importe_total,
            ene, feb, mar, abr, may, jun, jul, ago, sep, oct, nov, dic, saldo,
-           expediente, fecha_sesion_1, fecha_sesion_2, observaciones, comentarios,
+           expediente, fecha_sesion_1, fecha_sesion_2, sesiones, observaciones, comentarios,
            benchmark, revision_financiera, minuta, candidato, ct, comentarios_ct,
-           status, factura_1, factura_2, etiqueta, motivo,
+           status, client_status, factura_1, factura_2, etiqueta, motivo,
            estado_lead, estado_cita, estatus_comercial, meet_link, fecha_hora_inicio, fecha_hora_fin,
            archived_by, archived_at, lead_snapshot, cliente_manual_snapshot, cliente_snapshot, cita_snapshot
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?)`,
         [
           historicoId,
           manualClient.no_cliente || null,
@@ -1181,6 +1513,7 @@ class LeadApprovalController {
           manualClient.expediente || null,
           manualClient.fecha_sesion_1 || null,
           manualClient.fecha_sesion_2 || null,
+          this.toJsonOrNull(manualClient.sesiones),
           manualClient.observaciones || null,
           manualClient.comentarios || null,
           manualClient.benchmark || null,
@@ -1190,6 +1523,7 @@ class LeadApprovalController {
           manualClient.ct || null,
           manualClient.comentarios_ct || null,
           manualClient.status || null,
+          manualClient.client_status || CLIENT_STATUS_DEFAULT,
           manualClient.factura_1 || null,
           manualClient.factura_2 || null,
           etiqueta,
@@ -1310,6 +1644,7 @@ class LeadApprovalController {
         history.expediente || null,
         history.fecha_sesion_1 || null,
         history.fecha_sesion_2 || null,
+        this.toJsonOrNull(history.sesiones),
         history.observaciones || null,
         history.comentarios || null,
         history.benchmark || null,
@@ -1319,6 +1654,7 @@ class LeadApprovalController {
         history.ct || null,
         history.comentarios_ct || null,
         history.status || null,
+        history.client_status || CLIENT_STATUS_DEFAULT,
         history.factura_1 || null,
         history.factura_2 || null,
         history.estatus_comercial || 'cliente',
@@ -1333,9 +1669,9 @@ class LeadApprovalController {
                puesto = ?, servicios = ?, fuente_registro = ?, fecha_registro = ?,
                importe_total = ?, ene = ?, feb = ?, mar = ?, abr = ?, may = ?, jun = ?,
                jul = ?, ago = ?, sep = ?, oct = ?, nov = ?, dic = ?, saldo = ?,
-               expediente = ?, fecha_sesion_1 = ?, fecha_sesion_2 = ?, observaciones = ?,
+               expediente = ?, fecha_sesion_1 = ?, fecha_sesion_2 = ?, sesiones = ?, observaciones = ?,
                comentarios = ?, benchmark = ?, revision_financiera = ?, minuta = ?,
-               candidato = ?, ct = ?, comentarios_ct = ?, status = ?, factura_1 = ?,
+               candidato = ?, ct = ?, comentarios_ct = ?, status = ?, client_status = ?, factura_1 = ?,
                factura_2 = ?, estatus_comercial = ?, notas = ?, activo = 1,
                updated_at = NOW()
            WHERE id = ?`,
@@ -1347,12 +1683,12 @@ class LeadApprovalController {
              id, no_cliente, consultor_id, nombre, apellido, email, telefono_whatsapp,
              empresa, asesor_comercial, evento_previo, puesto, servicios, fuente_registro,
              fecha_registro, importe_total, ene, feb, mar, abr, may, jun, jul, ago, sep,
-             oct, nov, dic, saldo, expediente, fecha_sesion_1, fecha_sesion_2,
+             oct, nov, dic, saldo, expediente, fecha_sesion_1, fecha_sesion_2, sesiones,
              observaciones, comentarios, benchmark, revision_financiera, minuta,
-             candidato, ct, comentarios_ct, status, factura_1, factura_2,
+             candidato, ct, comentarios_ct, status, client_status, factura_1, factura_2,
              estatus_comercial, notas, activo, created_by
            )
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
           [clientId, ...values, currentConsultorId]
         );
       }
@@ -1420,8 +1756,8 @@ class LeadApprovalController {
     const clientId = uuidv4();
 
     await pool.execute(
-      `INSERT INTO CLIENTES (id, nombre, email, telefono_whatsapp, empresa, puesto, origen, estatus_comercial, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
+      `INSERT INTO CLIENTES (id, nombre, email, telefono_whatsapp, empresa, puesto, origen, estatus_comercial, client_status, created_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NOW())`,
       [
         clientId,
         lead.nombre,
@@ -1431,6 +1767,7 @@ class LeadApprovalController {
         lead.puesto || null,
         lead.origen || 'web',
         lead.estatus_comercial || 'interesado',
+        CLIENT_STATUS_DEFAULT,
       ]
     );
 

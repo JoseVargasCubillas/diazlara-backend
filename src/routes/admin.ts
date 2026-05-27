@@ -263,7 +263,8 @@ router.get(
       const clients = await leadApprovalController.listManualClients(
         consultorId,
         req.user?.role === 'super_admin',
-        limit
+        limit,
+        req.query.client_status as string | undefined
       );
       const clientArray = Array.isArray(clients) ? clients : [];
 
@@ -318,6 +319,157 @@ router.post(
       res.status(201).json({
         success: true,
         data: service,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/admin/asesores-comerciales
+ * List commercial advisor catalog.
+ */
+router.get(
+  '/asesores-comerciales',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const includeInactive = req.query.includeInactive === 'true';
+      const advisors = await leadApprovalController.listCommercialAdvisors(includeInactive);
+      const advisorArray = Array.isArray(advisors) ? advisors : [];
+
+      res.json({
+        success: true,
+        data: advisorArray,
+        count: advisorArray.length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/asesores-comerciales
+ * Create or reactivate a commercial advisor.
+ */
+router.post(
+  '/asesores-comerciales',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const advisor = await leadApprovalController.createCommercialAdvisor(req.body?.nombre);
+
+      res.status(201).json({
+        success: true,
+        data: advisor,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * GET /api/admin/clientes-consultor/:clientId/consultores
+ * List consultant assignments for a manual client.
+ */
+router.get(
+  '/clientes-consultor/:clientId/consultores',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const assignments = await leadApprovalController.listClientConsultantAssignments(req.params.clientId);
+      const assignmentArray = Array.isArray(assignments) ? assignments : [];
+
+      res.json({
+        success: true,
+        data: assignmentArray,
+        count: assignmentArray.length,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/clientes-consultor/:clientId/consultores
+ * Manually assign a consultant to a client service/stage.
+ */
+router.post(
+  '/clientes-consultor/:clientId/consultores',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const assignment = await leadApprovalController.createClientConsultantAssignment(
+        req.params.clientId,
+        req.body || {},
+        consultorId
+      );
+
+      res.status(201).json({
+        success: true,
+        data: assignment,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PATCH /api/admin/clientes-consultor/:clientId/consultores/:assignmentId
+ * Update a consultant assignment for a client.
+ */
+router.patch(
+  '/clientes-consultor/:clientId/consultores/:assignmentId',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const assignment = await leadApprovalController.updateClientConsultantAssignment(
+        req.params.clientId,
+        req.params.assignmentId,
+        req.body || {}
+      );
+
+      res.json({
+        success: true,
+        data: assignment,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * DELETE /api/admin/clientes-consultor/:clientId/consultores/:assignmentId
+ * Soft delete a consultant assignment for a client.
+ */
+router.delete(
+  '/clientes-consultor/:clientId/consultores/:assignmentId',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await leadApprovalController.deleteClientConsultantAssignment(
+        req.params.clientId,
+        req.params.assignmentId
+      );
+
+      res.json({
+        success: true,
+        data: result,
         timestamp: new Date().toISOString(),
       });
     } catch (error) {
@@ -492,6 +644,36 @@ router.patch(
       const result = await leadApprovalController.updateManualClient(
         req.params.clientId,
         req.body || {},
+        consultorId,
+        req.user?.role === 'super_admin'
+      );
+
+      res.json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PATCH /api/admin/clientes-consultor/:clientId/status
+ * Update only the client process status.
+ */
+router.patch(
+  '/clientes-consultor/:clientId/status',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const consultorId = req.user?.sub;
+      if (!consultorId) throw new AppError('Consultant ID not found in token', 401);
+
+      const result = await leadApprovalController.updateManualClientStatus(
+        req.params.clientId,
+        req.body?.client_status,
         consultorId,
         req.user?.role === 'super_admin'
       );
@@ -811,7 +993,6 @@ router.post(
 router.get(
   '/consultores',
   authenticateToken,
-  requireRole('super_admin'),
   async (_req: Request, res: Response, next: NextFunction) => {
     try {
       const result = await authController.listConsultores();
