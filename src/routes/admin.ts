@@ -175,7 +175,13 @@ router.get(
       const estatusComercial = req.query.estatus_comercial as string | undefined;
       const limit = Math.min(parseInt(req.query.limit as string) || 50, 100);
 
-      const leads = await leadApprovalController.listWaitingLeads(estado, limit, estatusComercial);
+      const leads = await leadApprovalController.listWaitingLeads(
+        estado,
+        limit,
+        estatusComercial,
+        req.user?.sub,
+        req.user?.role === 'super_admin'
+      );
       const leadArray = Array.isArray(leads) ? leads : [];
 
       res.json({
@@ -857,7 +863,7 @@ router.post(
         fecha_hora_fin,
         notas_cliente,
         estatus_comercial,
-      });
+      }, req.user?.role === 'super_admin');
 
       res.status(201).json({
         success: true,

@@ -3,6 +3,7 @@ import { logger } from '../config/logger';
 import { LeadSubmissionRequest, ValidationError } from '../types';
 import { v4 as uuidv4 } from 'uuid';
 import { CLIENT_STATUS_DEFAULT } from '../constants/clientStatus';
+import { roundRobinService } from '../services/RoundRobinService';
 
 interface LeadWaitingResponse {
   id: string;
@@ -61,6 +62,12 @@ class LeadController {
       );
 
       logger.info(`New lead in waiting list: ${leadId} (${leadData.email})`);
+
+      try {
+        await roundRobinService.asignarConsultor(leadId);
+      } catch (assignmentError) {
+        logger.error(`Lead created but round-robin assignment failed: ${leadId}`, assignmentError);
+      }
 
       return {
         id: leadId,

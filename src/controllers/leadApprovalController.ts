@@ -8,6 +8,7 @@ import { v4 as uuidv4 } from 'uuid';
 import { consultoriaIntegrationService } from '../services/ConsultoriaIntegrationService';
 import { appointmentController } from './appointmentController';
 import { CLIENT_STATUS_DEFAULT, CLIENT_STATUS_OPTIONS, ClientStatus, isClientStatus } from '../constants/clientStatus';
+import { roundRobinService } from '../services/RoundRobinService';
 
 const formidable = require('formidable');
 
@@ -170,7 +171,13 @@ const MONEY_FIELDS = new Set([
 ]);
 
 class LeadApprovalController {
-  async listWaitingLeads(estado: string = 'pendiente', limit: number = 50, estatusComercial?: string) {
+  async listWaitingLeads(
+    estado: string = 'pendiente',
+    limit: number = 50,
+    estatusComercial?: string,
+    currentConsultorId?: string,
+    isSuperAdmin: boolean = false
+  ) {
     try {
       const pool = await getDatabase();
       const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 100)) : 50;
@@ -207,6 +214,11 @@ class LeadApprovalController {
         params.push(estatusComercial);
       }
 
+      if (!isSuperAdmin && currentConsultorId) {
+        query += ' AND l.consultor_id = ?';
+        params.push(currentConsultorId);
+      }
+
       query += ` ORDER BY l.created_at ASC LIMIT ${safeLimit}`;
 
       const [rows] = await pool.execute(query, params);
@@ -233,13 +245,24 @@ class LeadApprovalController {
       }
 
       const lead = leadRows[0] as any;
+      let approvedConsultorId = lead.consultor_id || null;
+
+      if (!approvedConsultorId && data.consultorId) {
+        approvedConsultorId = await roundRobinService.isAgendaRoundRobinConsultorId(data.consultorId)
+          ? data.consultorId
+          : null;
+      }
+
+      if (!approvedConsultorId) {
+        approvedConsultorId = await roundRobinService.asignarConsultor(data.leadId);
+      }
 
       // Update lead status to approved
       await pool.execute(
         `UPDATE LEADS_EN_ESPERA
          SET estado = 'aprobado', consultor_id = ?, fecha_aprovado = NOW(), estatus_comercial = COALESCE(estatus_comercial, 'interesado')
          WHERE id = ?`,
-        [data.consultorId || null, data.leadId]
+        [approvedConsultorId, data.leadId]
       );
 
       logger.info(`Lead approved: ${data.leadId}`);
@@ -255,7 +278,7 @@ class LeadApprovalController {
           empresa: lead.empresa,
           puesto: lead.puesto,
           servicios: lead.servicios ? JSON.parse(lead.servicios) : [],
-          consultorId: data.consultorId,
+          consultorId: approvedConsultorId || undefined,
         });
 
         // Store Consultoria cliente ID for reference
@@ -420,7 +443,11 @@ class LeadApprovalController {
     }
   }
 
-  async assignSessionToLead(leadId: string, data: LeadSessionAssignmentRequest) {
+  async assignSessionToLead(
+    leadId: string,
+    data: LeadSessionAssignmentRequest,
+    isSuperAdmin: boolean = false
+  ) {
     try {
       const pool = await getDatabase();
 
@@ -438,6 +465,19 @@ class LeadApprovalController {
       if (lead.estado === 'rechazado') {
         throw new ValidationError('Rejected leads cannot be scheduled', {
           estado: 'El lead fue rechazado y no puede agendarse',
+        });
+      }
+
+      const canScheduleAgendaLead = await roundRobinService.isAgendaRoundRobinConsultorId(data.consultor_id);
+      if (!isSuperAdmin && !canScheduleAgendaLead) {
+        throw new ValidationError('Consultor is not allowed to schedule organic agenda leads', {
+          consultor_id: 'Solo Daniela, Jesus o un administrador pueden agendar citas de leads organicos',
+        });
+      }
+
+      if (!isSuperAdmin && lead.consultor_id && lead.consultor_id !== data.consultor_id) {
+        throw new ValidationError('Lead is assigned to another agenda consultant', {
+          consultor_id: 'Este lead esta asignado a otro consultor de agenda',
         });
       }
 
