@@ -87,7 +87,9 @@ interface ManualClientRequest {
   status?: string;
   client_status?: ClientStatus;
   factura_1?: string;
+  drive_1?: string;
   factura_2?: string;
+  drive_2?: string;
   estatus_comercial?: string;
   notas?: string;
   consultor_id?: string;
@@ -143,7 +145,9 @@ const MANUAL_CLIENT_MUTABLE_FIELDS = [
   'status',
   'client_status',
   'factura_1',
+  'drive_1',
   'factura_2',
+  'drive_2',
   'estatus_comercial',
   'notas',
 ] as const;
@@ -618,7 +622,7 @@ class LeadApprovalController {
           ene, feb, mar, abr, may, jun, jul, ago, sep, oct, nov, dic, saldo,
           expediente, fecha_sesion_1, fecha_sesion_2, observaciones, comentarios,
           benchmark, revision_financiera, minuta, candidato, ct, comentarios_ct,
-          status, client_status, factura_1, factura_2, etiqueta, motivo, estado_lead, estado_cita,
+          status, client_status, factura_1, drive_1, factura_2, drive_2, etiqueta, motivo, estado_lead, estado_cita,
           estatus_comercial, meet_link, fecha_hora_inicio, fecha_hora_fin,
           archived_by, archived_at
         FROM HISTORICO_CLIENTES`;
@@ -1253,10 +1257,10 @@ class LeadApprovalController {
            fecha_registro, importe_total, ene, feb, mar, abr, may, jun, jul, ago, sep,
            oct, nov, dic, saldo, expediente, fecha_sesion_1, fecha_sesion_2, sesiones,
           observaciones, comentarios, benchmark, revision_financiera, minuta,
-          candidato, ct, comentarios_ct, status, client_status, factura_1, factura_2,
+          candidato, ct, comentarios_ct, status, client_status, factura_1, drive_1, factura_2, drive_2,
           estatus_comercial, notas, created_by
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
         [
           clientId,
           this.normalizeString(data.no_cliente),
@@ -1301,7 +1305,9 @@ class LeadApprovalController {
           this.normalizeString(data.status),
           this.normalizeClientStatus(data.client_status),
           this.normalizeString(data.factura_1),
+          this.normalizeString(data.drive_1),
           this.normalizeString(data.factura_2),
+          this.normalizeString(data.drive_2),
           this.normalizeString(data.estatus_comercial) || 'prospecto',
           this.normalizeString(data.notas),
           currentConsultorId,
@@ -1472,11 +1478,11 @@ class LeadApprovalController {
            ene, feb, mar, abr, may, jun, jul, ago, sep, oct, nov, dic, saldo,
            expediente, fecha_sesion_1, fecha_sesion_2, sesiones, observaciones, comentarios,
            benchmark, revision_financiera, minuta, candidato, ct, comentarios_ct,
-           status, client_status, factura_1, factura_2, etiqueta, motivo,
+           status, client_status, factura_1, drive_1, factura_2, drive_2, etiqueta, motivo,
            estado_lead, estado_cita, estatus_comercial, meet_link, fecha_hora_inicio, fecha_hora_fin,
            archived_by, archived_at, lead_snapshot, cliente_manual_snapshot, cliente_snapshot, cita_snapshot
          )
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?)`,
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, ?, ?)`,
         [
           historicoId,
           manualClient.no_cliente || null,
@@ -1525,7 +1531,9 @@ class LeadApprovalController {
           manualClient.status || null,
           manualClient.client_status || CLIENT_STATUS_DEFAULT,
           manualClient.factura_1 || null,
+          manualClient.drive_1 || null,
           manualClient.factura_2 || null,
+          manualClient.drive_2 || null,
           etiqueta,
           data.motivo ? String(data.motivo).trim() : null,
           'manual',
@@ -1656,7 +1664,9 @@ class LeadApprovalController {
         history.status || null,
         history.client_status || CLIENT_STATUS_DEFAULT,
         history.factura_1 || null,
+        history.drive_1 || null,
         history.factura_2 || null,
+        history.drive_2 || null,
         history.estatus_comercial || 'cliente',
         history.motivo || null,
       ];
@@ -1672,7 +1682,7 @@ class LeadApprovalController {
                expediente = ?, fecha_sesion_1 = ?, fecha_sesion_2 = ?, sesiones = ?, observaciones = ?,
                comentarios = ?, benchmark = ?, revision_financiera = ?, minuta = ?,
                candidato = ?, ct = ?, comentarios_ct = ?, status = ?, client_status = ?, factura_1 = ?,
-               factura_2 = ?, estatus_comercial = ?, notas = ?, activo = 1,
+               drive_1 = ?, factura_2 = ?, drive_2 = ?, estatus_comercial = ?, notas = ?, activo = 1,
                updated_at = NOW()
            WHERE id = ?`,
           [...values, clientId]
@@ -1685,10 +1695,10 @@ class LeadApprovalController {
              fecha_registro, importe_total, ene, feb, mar, abr, may, jun, jul, ago, sep,
              oct, nov, dic, saldo, expediente, fecha_sesion_1, fecha_sesion_2, sesiones,
              observaciones, comentarios, benchmark, revision_financiera, minuta,
-             candidato, ct, comentarios_ct, status, client_status, factura_1, factura_2,
+             candidato, ct, comentarios_ct, status, client_status, factura_1, drive_1, factura_2, drive_2,
              estatus_comercial, notas, activo, created_by
            )
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)`,
           [clientId, ...values, currentConsultorId]
         );
       }
