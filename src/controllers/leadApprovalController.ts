@@ -267,7 +267,7 @@ class LeadApprovalController {
 
       logger.info(`Lead approved: ${data.leadId}`);
 
-      // Sync with Consultoria - create cliente there
+      // Best-effort sync with Consultoria; approval must not be blocked by that platform.
       let syncResult = null;
       try {
         syncResult = await consultoriaIntegrationService.syncLeadToConsultoria({
@@ -281,15 +281,16 @@ class LeadApprovalController {
           consultorId: approvedConsultorId || undefined,
         });
 
-        // Store Consultoria cliente ID for reference
-        await pool.execute(
-          `UPDATE LEADS_EN_ESPERA
-           SET consultoria_cliente_id = ?
-           WHERE id = ?`,
-          [syncResult.clienteId, data.leadId]
-        );
+        if (syncResult.success && syncResult.clienteId) {
+          await pool.execute(
+            `UPDATE LEADS_EN_ESPERA
+             SET consultoria_cliente_id = ?
+             WHERE id = ?`,
+            [syncResult.clienteId, data.leadId]
+          );
 
-        logger.info(`Lead synced to Consultoria: ${data.leadId} -> Cliente ${syncResult.clienteId}`);
+          logger.info(`Lead synced to Consultoria: ${data.leadId} -> Cliente ${syncResult.clienteId}`);
+        }
       } catch (syncError) {
         logger.error(`Warning: Could not sync lead to Consultoria: ${data.leadId}`, syncError);
         // Continue anyway - don't block approval if sync fails
@@ -298,8 +299,9 @@ class LeadApprovalController {
       return {
         id: data.leadId,
         estado: 'aprobado',
-        consultoriaClienteId: syncResult?.clienteId,
-        mensaje: syncResult
+        consultoriaClienteId: syncResult?.success ? syncResult.clienteId : undefined,
+        consultoria_sync: syncResult,
+        mensaje: syncResult?.success
           ? 'Lead aprobado y sincronizado con Consultoria. Puedes enviar el link de Google Meet.'
           : 'Lead aprobado. Puedes enviar el link de Google Meet cuando esté listo.',
       };
@@ -412,29 +414,98 @@ class LeadApprovalController {
     }
   }
 
-  async convertApprovedLeadToClient(leadId: string) {
+  async convertApprovedLeadToClient(
+    leadId: string,
+    currentConsultorId?: string,
+    isSuperAdmin: boolean = false,
+    options: { consultorId?: string; guardarHistorico?: boolean } = {}
+  ) {
     try {
       const pool = await getDatabase();
 
-      // Get the approved lead
       const [leadRows] = await pool.execute(
-        'SELECT * FROM LEADS_EN_ESPERA WHERE id = ? AND estado = "aprobado"',
+        'SELECT * FROM LEADS_EN_ESPERA WHERE id = ?',
         [leadId]
       );
 
       if (!Array.isArray(leadRows) || leadRows.length === 0) {
-        throw new ValidationError('Lead not found or not approved', {
-          leadId: 'Lead does not exist or is not approved',
+        throw new ValidationError('Lead not found', {
+          leadId: 'Lead does not exist',
         });
       }
 
       const lead = leadRows[0] as any;
+      if (lead.estado === 'rechazado') {
+        throw new ValidationError('Rejected leads cannot be converted to clients', {
+          estado: 'El lead fue rechazado y no puede pasar a cliente',
+        });
+      }
 
-      const clientId = await this.ensureClientFromLead(lead);
+      const consultorId = options.consultorId || lead.consultor_id || currentConsultorId;
+      if (!consultorId) {
+        throw new ValidationError('consultor_id is required', {
+          consultor_id: 'Selecciona un consultor para convertir el lead a cliente',
+        });
+      }
+
+      let manualClientId: string | null = null;
+      const [existingManualRows] = await pool.execute(
+        `SELECT id FROM CLIENTES_CONSULTOR
+         WHERE activo = 1
+           AND estatus_comercial = 'cliente'
+           AND LOWER(TRIM(email)) = LOWER(TRIM(?))
+         LIMIT 1`,
+        [lead.email]
+      );
+
+      if (Array.isArray(existingManualRows) && existingManualRows.length > 0) {
+        manualClientId = (existingManualRows[0] as any).id;
+      } else {
+        const manualClient = await this.createManualClient({
+          nombre: lead.nombre,
+          email: lead.email,
+          telefono_whatsapp: lead.telefono_whatsapp || undefined,
+          empresa: lead.empresa || undefined,
+          puesto: lead.puesto || undefined,
+          servicios: this.parseJsonArray(lead.servicios),
+          fuente_registro: 'lead_organico',
+          fecha_registro: this.normalizeString(lead.created_at) || new Date().toISOString().split('T')[0],
+          estatus_comercial: 'cliente',
+          consultor_id: consultorId,
+          notas: [
+            `Cliente convertido desde lead organico ${lead.id}.`,
+            lead.meet_link ? `Meet: ${lead.meet_link}` : '',
+          ].filter(Boolean).join('\n'),
+        }, currentConsultorId || consultorId, isSuperAdmin);
+
+        manualClientId = (manualClient as any)?.id || null;
+      }
+
+      let historico = null;
+      if (options.guardarHistorico !== false) {
+        historico = await this.archiveLeadToHistory(leadId, {
+          etiqueta: 'lead_convertido_cliente',
+          motivo: 'Lead organico convertido a cliente.',
+          archivedBy: currentConsultorId || consultorId,
+        });
+      } else {
+        await pool.execute(
+          `UPDATE LEADS_EN_ESPERA
+           SET estado = 'aprobado',
+               consultor_id = ?,
+               fecha_aprovado = COALESCE(fecha_aprovado, NOW()),
+               estatus_comercial = 'cliente',
+               updated_at = NOW()
+           WHERE id = ?`,
+          [consultorId, leadId]
+        );
+      }
 
       return {
-        clientId,
+        clientId: manualClientId,
+        clienteManualId: manualClientId,
         leadId,
+        historico,
         mensaje: 'Lead convertido a cliente.',
       };
     } catch (error) {
@@ -707,6 +778,98 @@ class LeadApprovalController {
     }
 
     return JSON.stringify(value);
+  }
+
+  private parseJsonArray(value: unknown): string[] {
+    if (Array.isArray(value)) {
+      return value.map((item) => String(item).trim()).filter(Boolean);
+    }
+
+    if (typeof value !== 'string' || !value.trim()) {
+      return [];
+    }
+
+    try {
+      const parsed = JSON.parse(value);
+      if (Array.isArray(parsed)) {
+        return parsed.map((item) => String(item).trim()).filter(Boolean);
+      }
+      return parsed ? [String(parsed).trim()].filter(Boolean) : [];
+    } catch {
+      return [value.trim()].filter(Boolean);
+    }
+  }
+
+  private async updateConsultoriaSyncStatus(pool: any, clientId: string, syncResult: any): Promise<void> {
+    if (syncResult?.success) {
+      await pool.execute(
+        `UPDATE CLIENTES_CONSULTOR
+         SET consultoria_cliente_id = ?,
+             consultoria_sync_status = 'synced',
+             consultoria_synced_at = NOW(),
+             consultoria_sync_error = NULL
+         WHERE id = ?`,
+        [syncResult.clienteId || null, clientId]
+      );
+      return;
+    }
+
+    await pool.execute(
+      `UPDATE CLIENTES_CONSULTOR
+       SET consultoria_sync_status = 'failed',
+           consultoria_sync_error = ?
+       WHERE id = ?`,
+      [syncResult?.error || syncResult?.mensaje || 'Error al sincronizar con Consultoria', clientId]
+    );
+  }
+
+  private async updateConsultoriaSyncStatusByEmail(pool: any, email: string, syncResult: any): Promise<void> {
+    const cleanEmail = this.normalizeString(email);
+    if (!cleanEmail || !syncResult?.success) return;
+
+    await pool.execute(
+      `UPDATE CLIENTES_CONSULTOR
+       SET consultoria_cliente_id = ?,
+           consultoria_sync_status = 'synced',
+           consultoria_synced_at = NOW(),
+           consultoria_sync_error = NULL
+       WHERE activo = 1
+         AND estatus_comercial = 'cliente'
+         AND LOWER(TRIM(email)) = LOWER(TRIM(?))`,
+      [syncResult.clienteId || null, cleanEmail]
+    );
+  }
+
+  private uniqueClientsByEmail(clients: any[], limit: number): any[] {
+    const seen = new Set<string>();
+    const uniqueClients = [];
+
+    for (const client of clients) {
+      const email = String(client.email || '').trim().toLowerCase();
+      if (!email || seen.has(email)) continue;
+      seen.add(email);
+      uniqueClients.push(client);
+      if (uniqueClients.length >= limit) break;
+    }
+
+    return uniqueClients;
+  }
+
+  private async markNonSyncableConsultoriaClients(pool: any): Promise<number> {
+    const [result] = await pool.execute(
+      `UPDATE CLIENTES_CONSULTOR
+       SET consultoria_sync_status = 'ignored',
+           consultoria_sync_error = 'Cliente inactivo o no marcado como cliente; no requiere sincronizacion'
+       WHERE (consultoria_sync_status IS NULL OR consultoria_sync_status IN ('pending', 'failed'))
+         AND (
+           activo <> 1
+           OR estatus_comercial <> 'cliente'
+           OR email IS NULL
+           OR TRIM(email) = ''
+         )`
+    );
+
+    return Number((result as any)?.affectedRows || 0);
   }
 
   private normalizeString(value: unknown): string | null {
@@ -1356,7 +1519,7 @@ class LeadApprovalController {
 
       logger.info(`Manual consultant client created: ${clientId} by ${currentConsultorId}`);
 
-      return {
+      const createdClient = {
         id: clientId,
         consultor_id: consultorId,
         ...data,
@@ -1366,9 +1529,271 @@ class LeadApprovalController {
         sesiones,
         servicios,
       };
+
+      const consultoriaSync = await consultoriaIntegrationService.syncManualClientToConsultoria({
+        id: clientId,
+        nombre: String(data.nombre).trim(),
+        apellido: this.normalizeString(data.apellido) || undefined,
+        email: String(data.email).trim(),
+        telefono_whatsapp: this.normalizeString(data.telefono_whatsapp) || undefined,
+        empresa: this.normalizeString(data.empresa) || 'NA',
+        puesto: this.normalizeString(data.puesto) || undefined,
+        servicios,
+        fecha_registro: this.normalizeString(data.fecha_registro) || undefined,
+        importe_total: data.importe_total,
+        ene: data.ene,
+        feb: data.feb,
+        mar: data.mar,
+        abr: data.abr,
+        may: data.may,
+        jun: data.jun,
+        jul: data.jul,
+        ago: data.ago,
+        sep: data.sep,
+        oct: data.oct,
+        nov: data.nov,
+        dic: data.dic,
+        consultorId,
+      });
+
+      await this.updateConsultoriaSyncStatus(pool, clientId, consultoriaSync);
+
+      return {
+        ...createdClient,
+        consultoria_sync: consultoriaSync,
+      };
     } catch (error) {
       logger.error('Error creating manual client:', error);
       throw error;
+    }
+  }
+
+  async backfillManualClientsToConsultoria(limit: number = 50) {
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 200)) : 50;
+
+    try {
+      const pool = await getDatabase();
+      const ignored = await this.markNonSyncableConsultoriaClients(pool);
+      const [rows] = await pool.execute(
+        `SELECT id, consultor_id, nombre, apellido, email, telefono_whatsapp, empresa, puesto,
+                servicios, fecha_registro, importe_total, ene, feb, mar, abr, may, jun,
+                jul, ago, sep, oct, nov, dic
+         FROM CLIENTES_CONSULTOR
+         WHERE activo = 1
+           AND estatus_comercial = 'cliente'
+           AND email IS NOT NULL
+           AND TRIM(email) <> ''
+           AND (consultoria_sync_status IS NULL OR consultoria_sync_status <> 'synced')
+         ORDER BY created_at ASC
+         LIMIT ${safeLimit * 3}`
+      );
+
+      const clients = this.uniqueClientsByEmail(Array.isArray(rows) ? rows as any[] : [], safeLimit);
+      const results = [];
+      let synced = 0;
+      let failed = 0;
+      let existing = 0;
+
+      for (const client of clients) {
+        const syncResult = await consultoriaIntegrationService.syncManualClientToConsultoria({
+          id: client.id,
+          nombre: String(client.nombre || '').trim(),
+          apellido: this.normalizeString(client.apellido) || undefined,
+          email: String(client.email || '').trim(),
+          telefono_whatsapp: this.normalizeString(client.telefono_whatsapp) || undefined,
+          empresa: this.normalizeString(client.empresa) || 'NA',
+          puesto: this.normalizeString(client.puesto) || undefined,
+          servicios: this.parseJsonArray(client.servicios),
+          fecha_registro: this.normalizeString(client.fecha_registro) || undefined,
+          importe_total: client.importe_total,
+          ene: client.ene,
+          feb: client.feb,
+          mar: client.mar,
+          abr: client.abr,
+          may: client.may,
+          jun: client.jun,
+          jul: client.jul,
+          ago: client.ago,
+          sep: client.sep,
+          oct: client.oct,
+          nov: client.nov,
+          dic: client.dic,
+          consultorId: client.consultor_id,
+        });
+
+        if (syncResult.success) synced += 1;
+        else failed += 1;
+        if (syncResult.existing) existing += 1;
+
+        await this.updateConsultoriaSyncStatus(pool, client.id, syncResult);
+        await this.updateConsultoriaSyncStatusByEmail(pool, client.email, syncResult);
+
+        results.push({
+          id: client.id,
+          email: client.email,
+          success: syncResult.success,
+          clienteId: syncResult.clienteId,
+          pendingRetry: syncResult.pendingRetry,
+          existing: syncResult.existing,
+          error: syncResult.error,
+        });
+      }
+
+      const [remainingRows] = await pool.execute(
+        `SELECT COUNT(DISTINCT LOWER(TRIM(email))) AS total
+         FROM CLIENTES_CONSULTOR
+         WHERE activo = 1
+           AND estatus_comercial = 'cliente'
+           AND email IS NOT NULL
+           AND TRIM(email) <> ''
+           AND (consultoria_sync_status IS NULL OR consultoria_sync_status <> 'synced')`
+      );
+
+      return {
+        processed: clients.length,
+        synced,
+        failed,
+        existing,
+        ignored,
+        remaining: Array.isArray(remainingRows) ? Number((remainingRows[0] as any)?.total || 0) : 0,
+        remainingBatchLimit: safeLimit,
+        results,
+      };
+    } catch (error) {
+      logger.error('Error backfilling manual clients to Consultoria:', error);
+      throw error;
+    }
+  }
+
+  async reconcileManualClientsWithConsultoria(limit: number = 50) {
+    const safeLimit = Number.isFinite(limit) ? Math.max(1, Math.min(limit, 200)) : 50;
+
+    try {
+      const pool = await getDatabase();
+      const ignored = await this.markNonSyncableConsultoriaClients(pool);
+      const [rows] = await pool.execute(
+        `SELECT id, consultor_id, nombre, apellido, email, telefono_whatsapp, empresa, puesto,
+                servicios, fecha_registro, importe_total, ene, feb, mar, abr, may, jun,
+                jul, ago, sep, oct, nov, dic
+         FROM CLIENTES_CONSULTOR
+         WHERE activo = 1
+           AND estatus_comercial = 'cliente'
+           AND email IS NOT NULL
+           AND TRIM(email) <> ''
+           AND (consultoria_sync_status IS NULL OR consultoria_sync_status <> 'synced')
+         ORDER BY created_at ASC
+         LIMIT ${safeLimit * 3}`
+      );
+
+      const clients = this.uniqueClientsByEmail(Array.isArray(rows) ? rows as any[] : [], safeLimit);
+      const results = [];
+      let synced = 0;
+      let skipped = 0;
+      let failed = 0;
+
+      for (const client of clients) {
+        try {
+          const existingClient = await consultoriaIntegrationService.findClientByEmail({
+            id: client.id,
+            nombre: String(client.nombre || '').trim(),
+            apellido: this.normalizeString(client.apellido) || undefined,
+            email: String(client.email || '').trim(),
+            telefono_whatsapp: this.normalizeString(client.telefono_whatsapp) || undefined,
+            empresa: this.normalizeString(client.empresa) || 'NA',
+            puesto: this.normalizeString(client.puesto) || undefined,
+            servicios: this.parseJsonArray(client.servicios),
+            fecha_registro: this.normalizeString(client.fecha_registro) || undefined,
+            importe_total: client.importe_total,
+            ene: client.ene,
+            feb: client.feb,
+            mar: client.mar,
+            abr: client.abr,
+            may: client.may,
+            jun: client.jun,
+            jul: client.jul,
+            ago: client.ago,
+            sep: client.sep,
+            oct: client.oct,
+            nov: client.nov,
+            dic: client.dic,
+            consultorId: client.consultor_id,
+          });
+
+          if (existingClient) {
+            synced += 1;
+            await this.updateConsultoriaSyncStatus(pool, client.id, existingClient);
+            await this.updateConsultoriaSyncStatusByEmail(pool, client.email, existingClient);
+            results.push({
+              id: client.id,
+              email: client.email,
+              success: true,
+              existing: true,
+              clienteId: existingClient.clienteId,
+            });
+            continue;
+          }
+
+          skipped += 1;
+          results.push({
+            id: client.id,
+            email: client.email,
+            success: false,
+            skipped: true,
+            error: 'No existe todavia en Consultoria',
+          });
+        } catch (error) {
+          failed += 1;
+          const message = error instanceof Error ? error.message : 'Error al verificar Consultoria';
+          results.push({
+            id: client.id,
+            email: client.email,
+            success: false,
+            error: message,
+          });
+        }
+      }
+
+      const [remainingRows] = await pool.execute(
+        `SELECT COUNT(DISTINCT LOWER(TRIM(email))) AS total
+         FROM CLIENTES_CONSULTOR
+         WHERE activo = 1
+           AND estatus_comercial = 'cliente'
+           AND email IS NOT NULL
+           AND TRIM(email) <> ''
+           AND (consultoria_sync_status IS NULL OR consultoria_sync_status <> 'synced')`
+      );
+
+      return {
+        processed: clients.length,
+        synced,
+        failed,
+        skipped,
+        ignored,
+        remaining: Array.isArray(remainingRows) ? Number((remainingRows[0] as any)?.total || 0) : 0,
+        results,
+      };
+    } catch (error) {
+      logger.error('Error reconciling manual clients with Consultoria:', error);
+      throw error;
+    }
+  }
+
+  async markConsultoriaRetryResults(results: Array<{
+    diazlaraClientId?: string;
+    success?: boolean;
+    clienteId?: number | string;
+    error?: string;
+  }>) {
+    const pool = await getDatabase();
+
+    for (const result of results) {
+      if (!result.diazlaraClientId) continue;
+
+      await this.updateConsultoriaSyncStatus(pool, result.diazlaraClientId, {
+        success: Boolean(result.success),
+        clienteId: result.clienteId,
+        error: result.error,
+      });
     }
   }
 

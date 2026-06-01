@@ -5,6 +5,7 @@ import { diagnosticoController } from '../controllers/diagnosticoController';
 import { authenticateToken, requireRole } from '../middleware/auth';
 import { AppError, ValidationError } from '../types';
 import { validationService } from '../services/ValidationService';
+import { consultoriaIntegrationService } from '../services/ConsultoriaIntegrationService';
 
 const router = Router();
 
@@ -636,6 +637,78 @@ router.post(
 );
 
 /**
+ * POST /api/admin/consultoria-sync/retry
+ * Retry pending Consultoria client sync failures.
+ */
+router.post(
+  '/consultoria-sync/retry',
+  authenticateToken,
+  requireRole('super_admin'),
+  async (_req: Request, res: Response, next: NextFunction) => {
+    try {
+      const result = await consultoriaIntegrationService.retryFailedSyncs();
+      await leadApprovalController.markConsultoriaRetryResults(result.results || []);
+
+      res.json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/consultoria-sync/backfill
+ * Sync existing active Diaz Lara manual clients to Consultoria in batches.
+ */
+router.post(
+  '/consultoria-sync/backfill',
+  authenticateToken,
+  requireRole('super_admin'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const limit = req.query.limit ? Number(req.query.limit) : 50;
+      const result = await leadApprovalController.backfillManualClientsToConsultoria(limit);
+
+      res.json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * POST /api/admin/consultoria-sync/reconcile
+ * Mark Diaz Lara clients as synced when they already exist in Consultoria.
+ */
+router.post(
+  '/consultoria-sync/reconcile',
+  authenticateToken,
+  requireRole('super_admin'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const limit = req.query.limit ? Number(req.query.limit) : 50;
+      const result = await leadApprovalController.reconcileManualClientsWithConsultoria(limit);
+
+      res.json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * PATCH /api/admin/clientes-consultor/:clientId
  * Update a manually added client and its service tags.
  */
@@ -979,7 +1052,15 @@ router.post(
     try {
       const { leadId } = req.params;
 
-      const result = await leadApprovalController.convertApprovedLeadToClient(leadId);
+      const result = await leadApprovalController.convertApprovedLeadToClient(
+        leadId,
+        req.user?.sub,
+        req.user?.role === 'super_admin',
+        {
+          consultorId: req.body?.consultor_id,
+          guardarHistorico: req.body?.guardar_historico !== false,
+        }
+      );
 
       res.json({
         success: true,
