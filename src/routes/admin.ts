@@ -1166,6 +1166,52 @@ router.patch(
 );
 
 /**
+ * PATCH /api/admin/consultores/:id/reset-password
+ * Admin resets a consultant's password (no current password required)
+ */
+router.patch(
+  '/consultores/:id/reset-password',
+  authenticateToken,
+  requireRole('super_admin'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const { newPassword } = req.body;
+      if (!newPassword) {
+        throw new ValidationError('newPassword es requerido', { newPassword: 'Requerido' });
+      }
+      await authController.resetConsultorPasswordByAdmin(id, newPassword);
+      res.json({ success: true, timestamp: new Date().toISOString() });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
+ * PATCH /api/admin/consultores/:id/rol
+ * Admin changes a consultant's role
+ */
+router.patch(
+  '/consultores/:id/rol',
+  authenticateToken,
+  requireRole('super_admin'),
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      const { id } = req.params;
+      const { rol } = req.body;
+      if (!rol || !['consultant', 'super_admin'].includes(rol)) {
+        throw new ValidationError('rol debe ser consultant o super_admin', { rol: 'Inválido' });
+      }
+      const result = await authController.updateConsultorRol(id, rol);
+      res.json({ success: true, data: result, timestamp: new Date().toISOString() });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * DELETE /api/admin/consultores/:id
  * Delete a consultant permanently
  */

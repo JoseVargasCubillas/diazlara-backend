@@ -310,6 +310,45 @@ class AuthController {
   }
 
   /**
+   * Admin resets a consultant's password without needing current password
+   */
+  async resetConsultorPasswordByAdmin(id: string, newPassword: string): Promise<void> {
+    try {
+      if (!newPassword || newPassword.length < 6) {
+        throw new ValidationError('La nueva contraseña debe tener al menos 6 caracteres', {
+          newPassword: 'Mínimo 6 caracteres',
+        });
+      }
+      const pool = await getDatabase();
+      const [rows] = await pool.execute('SELECT id FROM CONSULTORES WHERE id = ?', [id]);
+      if (!Array.isArray(rows) || rows.length === 0) {
+        throw new NotFoundError('Consultor no encontrado');
+      }
+      const hash = await bcrypt.hash(newPassword, 12);
+      await pool.execute('UPDATE CONSULTORES SET password_hash = ? WHERE id = ?', [hash, id]);
+      logger.info(`Admin reset password for consultant ${id}`);
+    } catch (error) {
+      logger.error('Error resetting consultor password by admin:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Admin changes a consultant's role
+   */
+  async updateConsultorRol(id: string, rol: string): Promise<Partial<Consultor>> {
+    try {
+      const pool = await getDatabase();
+      await pool.execute('UPDATE CONSULTORES SET rol = ? WHERE id = ?', [rol, id]);
+      logger.info(`Consultant ${id} rol updated to ${rol}`);
+      return this.getProfile(id);
+    } catch (error) {
+      logger.error('Error updating consultor rol:', error);
+      throw error;
+    }
+  }
+
+  /**
    * Delete a consultant
    */
   async deleteConsultor(id: string): Promise<void> {

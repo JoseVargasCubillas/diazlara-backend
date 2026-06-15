@@ -215,7 +215,8 @@ class LeadApprovalController {
       }
 
       if (!isSuperAdmin && currentConsultorId) {
-        query += ' AND l.consultor_id = ?';
+        // Show organic (unassigned) leads + leads already assigned to this consultant
+        query += ' AND (l.consultor_id IS NULL OR l.consultor_id = ?)';
         params.push(currentConsultorId);
       }
 
