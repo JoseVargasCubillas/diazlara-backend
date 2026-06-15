@@ -1,6 +1,6 @@
 import { getDatabase } from '../config/database';
 import { logger } from '../config/logger';
-import { Consultor, UnauthorizedError, NotFoundError, ValidationError } from '../types';
+import { Consultor, UnauthorizedError, NotFoundError, ValidationError, ConflictError } from '../types';
 import { generateToken } from '../middleware/auth';
 import bcrypt from 'bcrypt';
 import { v4 as uuidv4 } from 'uuid';
@@ -317,8 +317,14 @@ class AuthController {
       const pool = await getDatabase();
       await pool.execute('DELETE FROM CONSULTORES WHERE id = ?', [id]);
       logger.info(`Consultant ${id} deleted`);
-    } catch (error) {
+    } catch (error: any) {
       logger.error('Error deleting consultor:', error);
+      // MySQL FK constraint violation — the consultant has linked leads, citas, or clients
+      if (error?.code === 'ER_ROW_IS_REFERENCED_2' || error?.errno === 1451 || error?.code === 'ER_ROW_IS_REFERENCED') {
+        throw new ConflictError(
+          'No se puede eliminar este consultor porque tiene leads, citas o clientes vinculados. Desactívalo en su lugar para conservar el historial.'
+        );
+      }
       throw error;
     }
   }
