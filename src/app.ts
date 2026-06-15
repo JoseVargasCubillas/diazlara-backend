@@ -140,8 +140,11 @@ app.use((err: CustomError, _req: Request, res: Response, _next: NextFunction) =>
     method: _req.method,
   });
 
+  // For 5xx errors, expose the message only when it came from a known AppError
+  // (i.e. we threw it intentionally). Raw DB / unexpected errors stay generic.
+  const isKnownError = err.statusCode !== undefined || err.status !== undefined;
   res.status(status).json({
-    error: status === 500 ? 'Internal Server Error' : message,
+    error: (status >= 500 && !isKnownError) ? 'Internal Server Error' : message,
     ...(process.env.NODE_ENV === 'development' && { stack: err.stack }),
   });
 });
