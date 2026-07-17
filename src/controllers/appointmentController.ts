@@ -40,6 +40,7 @@ class AppointmentController {
       const startTime = new Date(data.fecha_hora_inicio);
       const endTime = new Date(data.fecha_hora_fin);
 
+      // 1) BD como gate primario (baratísimo).
       const isAvailable = await slotCalculatorService.isSlotAvailable(
         data.consultor_id,
         startTime,
@@ -47,6 +48,22 @@ class AppointmentController {
       );
       if (!isAvailable) {
         throw new ConflictError('Time slot is not available', {
+          consultorId: data.consultor_id,
+          startTime: data.fecha_hora_inicio,
+          endTime: data.fecha_hora_fin,
+        });
+      }
+
+      // 2) Validación adicional contra el Google Calendar de la cuenta
+      //    asignada al consultor (freebusy). Si Google reporta ocupado
+      //    respondemos 409 igual que ante conflictos de BD.
+      const freeInGoogle = await googleMeetService.isSlotFreeInCalendar(
+        data.consultor_id,
+        startTime,
+        endTime
+      );
+      if (!freeInGoogle) {
+        throw new ConflictError('Time slot is not available in Google Calendar', {
           consultorId: data.consultor_id,
           startTime: data.fecha_hora_inicio,
           endTime: data.fecha_hora_fin,
@@ -73,29 +90,38 @@ class AppointmentController {
       const consultant = consultorDetails[0] as any;
       const client = clientDetails[0] as any;
 
-      // Generate Google Meet link — log the FULL error if it fails
+      // Crea evento + Meet en la cuenta correcta. Si la cuenta no está
+      // configurada, se logea y la cita queda sin Meet (modo degradado).
       let meetLink: string | null = null;
+      let googleEventId: string | null = null;
+      let calendarAccountKey: string | null = null;
       try {
-        meetLink = await googleMeetService.generateMeetLink(
-          consultant.email,
-          client.email,
-          client.nombre,
+        const evt = await googleMeetService.createEventForConsultor({
+          consultorId: data.consultor_id,
+          consultantEmail: consultant.email,
+          clientEmail: client.email,
+          clientName: client.nombre,
           startTime,
-          endTime
-        );
+          endTime,
+        });
+        meetLink = evt.meetLink;
+        googleEventId = evt.eventId;
+        calendarAccountKey = evt.calendarAccountKey;
       } catch (meetErr: any) {
-        // Log error completo para diagnóstico — ya NO se traga en silencio
         logger.error(
-          `[GoogleMeet] No se pudo generar el enlace de Meet para ${client.email}: ${meetErr?.message || meetErr}`
+          `[GoogleMeet] No se pudo generar el evento/Meet para ${client.email}: ${meetErr?.message || meetErr}`
         );
-        logger.error('[GoogleMeet] Revisa: GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_CALENDAR_ID y que el calendario esté compartido con el service account como Editor.');
+        logger.error(
+          '[GoogleMeet] Revisa GOOGLE_SERVICE_ACCOUNT_JSON, GOOGLE_CALENDAR_ACCOUNTS (o GOOGLE_IMPERSONATE_USER/GOOGLE_CALENDAR_ID en modo legacy), y que el usuario impersonado tenga Domain-Wide Delegation habilitada.'
+        );
       }
 
       const citaId = uuidv4();
       await pool.execute(
         `INSERT INTO CITAS
-         (id, cliente_id, consultor_id, fecha_hora_inicio, fecha_hora_fin, estado, meet_link, notas_cliente, created_at)
-         VALUES (?, ?, ?, ?, ?, 'agendada', ?, ?, NOW())`,
+         (id, cliente_id, consultor_id, fecha_hora_inicio, fecha_hora_fin, estado,
+          meet_link, google_event_id, calendar_account_key, notas_cliente, created_at)
+         VALUES (?, ?, ?, ?, ?, 'agendada', ?, ?, ?, ?, NOW())`,
         [
           citaId,
           clientId,
@@ -103,12 +129,16 @@ class AppointmentController {
           startTime,
           endTime,
           meetLink,
+          googleEventId,
+          calendarAccountKey,
           data.notas_cliente || null,
         ]
       );
 
       if (meetLink) {
-        logger.info(`Cita ${citaId} creada con Meet link: ${meetLink}`);
+        logger.info(
+          `Cita ${citaId} creada con Meet ${meetLink} (cuenta=${calendarAccountKey}, eventId=${googleEventId}).`
+        );
       } else {
         logger.warn(`Cita ${citaId} creada SIN Meet link — agrega el enlace manualmente.`);
       }
@@ -196,6 +226,25 @@ class AppointmentController {
       logger.info(`Appointment status updated: ${citaId} -> ${estado}`);
 
       if (estado === 'cancelada') {
+        // Cancelar el evento en Google usando la cuenta original.
+        const [rows] = await pool.execute(
+          'SELECT google_event_id, calendar_account_key FROM CITAS WHERE id = ?',
+          [citaId]
+        );
+        const row = Array.isArray(rows) && rows.length > 0 ? (rows[0] as any) : null;
+        if (row?.google_event_id && row?.calendar_account_key) {
+          setImmediate(() => {
+            googleMeetService
+              .cancelEvent(row.calendar_account_key, row.google_event_id)
+              .catch((err) => {
+                logger.error(
+                  `Failed to cancel Google event ${row.google_event_id}:`,
+                  err
+                );
+              });
+          });
+        }
+
         setImmediate(() => {
           notificationService.sendCancellationNotification(citaId).catch((err) => {
             logger.error('Failed to send cancellation notification:', err);

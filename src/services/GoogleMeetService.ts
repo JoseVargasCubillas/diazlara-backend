@@ -1,31 +1,35 @@
 /**
- * GoogleMeetService — crea eventos de Google Calendar con enlace de Meet.
+ * GoogleMeetService — crea eventos de Google Calendar con Meet y los
+ * cancela/consulta usando **una o varias cuentas** de Workspace.
  *
- * Para crear Meet como un usuario con GOOGLE_CALENDAR_ID=primary,
- * requiere Google Workspace y Domain-Wide Delegation.
- *
- * Necesitas:
- *   1. Service Account JSON/ruta/base64  →  GOOGLE_SERVICE_ACCOUNT_JSON
- *   2. Usuario Workspace a impersonar  →  GOOGLE_IMPERSONATE_USER
- *   3. ID del calendario (normalmente "primary")  →  GOOGLE_CALENDAR_ID
+ * Autenticación: Service Account con Domain-Wide Delegation. El service
+ * account impersona al `impersonateUser` configurado en cada cuenta
+ * (ver `CalendarAccountRegistry`).
  *
  * Configuración .env:
- *   GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}
- *   # O:
- *   GOOGLE_SERVICE_ACCOUNT_JSON=C:\ruta\service-account.json
+ *   GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account",...}   # o ruta o base64
+ *   # Multi-cuenta (recomendado):
+ *   GOOGLE_CALENDAR_ACCOUNTS=[{"key":"jessica","impersonateUser":"...","calendarId":"primary","consultorIds":["<uuid>"]},{"key":"jazmin",...}]
+ *   # Modo compatibilidad (una sola cuenta, se registra como "legacy"):
  *   GOOGLE_IMPERSONATE_USER=contacto@diazlara.mx
  *   GOOGLE_CALENDAR_ID=primary
+ *   # Producción recomendado: exige mapeo explícito.
+ *   STRICT_CALENDAR_ACCOUNTS=true
  */
 import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
 import fs from 'fs';
 import { env } from '../config/environment';
 import { logger } from '../config/logger';
+import {
+  calendarAccountRegistry,
+  CalendarAccountConfig,
+} from './CalendarAccountRegistry';
 
 class GoogleMeetService {
-  private auth: JWT | null = null;
+  private jwtByAccount = new Map<string, JWT>();
   private serviceAccountEmail: string | null = null;
-  private impersonatedUser: string | undefined;
+  private serviceAccountKey: any = null;
 
   private getExtraAttendeeEmails(): string[] {
     return (env.GOOGLE_MEET_EXTRA_ATTENDEES || '')
@@ -105,88 +109,141 @@ class GoogleMeetService {
     }
   }
 
-  private async initializeAuth(): Promise<JWT> {
-    if (this.auth) return this.auth;
-
+  private loadServiceAccountKey(): any {
+    if (this.serviceAccountKey) return this.serviceAccountKey;
     if (!env.GOOGLE_SERVICE_ACCOUNT_JSON) {
       throw new Error(
         'GOOGLE_SERVICE_ACCOUNT_JSON no está configurado. ' +
         'Agrega el JSON del Service Account en el archivo .env.'
       );
     }
+    this.serviceAccountKey = this.parseServiceAccountKey(env.GOOGLE_SERVICE_ACCOUNT_JSON);
+    this.serviceAccountEmail = this.serviceAccountKey.client_email;
+    return this.serviceAccountKey;
+  }
 
-    if (!env.GOOGLE_CALENDAR_ID) {
+  private async getAuthForAccount(account: CalendarAccountConfig): Promise<JWT> {
+    const cached = this.jwtByAccount.get(account.key);
+    if (cached) return cached;
+
+    const key = this.loadServiceAccountKey();
+
+    const impersonated = account.impersonateUser.trim();
+    if (!impersonated) {
       throw new Error(
-        'GOOGLE_CALENDAR_ID no está configurado. ' +
-        'Pon el email del dueño del calendario (ej: contacto@diazlara.mx) en .env, ' +
-        'y comparte ese calendario con el email del Service Account como Editor.'
+        `Cuenta de calendario "${account.key}" no tiene impersonateUser configurado.`
+      );
+    }
+    if (impersonated.toLowerCase() === String(key.client_email).toLowerCase()) {
+      throw new Error(
+        `Cuenta de calendario "${account.key}": impersonateUser no puede ser el email del ` +
+          `service account. Debe ser un usuario real de Google Workspace autorizado con ` +
+          `Domain-Wide Delegation.`
       );
     }
 
-    const serviceAccountKey = this.parseServiceAccountKey(env.GOOGLE_SERVICE_ACCOUNT_JSON);
-    this.serviceAccountEmail = serviceAccountKey.client_email;
-
-    const configuredImpersonatedUser = env.GOOGLE_IMPERSONATE_USER?.trim() || undefined;
-    this.impersonatedUser =
-      configuredImpersonatedUser &&
-      configuredImpersonatedUser.toLowerCase() !== serviceAccountKey.client_email.toLowerCase()
-        ? configuredImpersonatedUser
-        : undefined;
-
-    if (configuredImpersonatedUser && !this.impersonatedUser) {
-      logger.warn(
-        '[GoogleMeet] GOOGLE_IMPERSONATE_USER es igual al email del service account; ' +
-        'se ignora porque no es una impersonación válida. Debe ser un usuario real de Google Workspace.'
-      );
-    }
-
-    this.auth = new JWT({
-      email: serviceAccountKey.client_email,
-      key: serviceAccountKey.private_key,
-      subject: this.impersonatedUser,
+    const jwt = new JWT({
+      email: key.client_email,
+      key: key.private_key,
+      subject: impersonated,
       scopes: [
         'https://www.googleapis.com/auth/calendar',
         'https://www.googleapis.com/auth/calendar.events',
       ],
     });
 
+    this.jwtByAccount.set(account.key, jwt);
     logger.info(
-      `Google Calendar auth inicializado con service account: ${serviceAccountKey.client_email}` +
-      (this.impersonatedUser ? ` impersonando a ${this.impersonatedUser}` : '')
+      `[GoogleMeet] Auth inicializado para cuenta "${account.key}" impersonando a ${impersonated}` +
+        ` (calendar: ${account.calendarId})`
     );
-    return this.auth;
+    return jwt;
+  }
+
+  /** Devuelve la cuenta configurada para un consultor o lanza error. */
+  resolveAccountForConsultorOrThrow(consultorId: string): CalendarAccountConfig {
+    const account = calendarAccountRegistry.resolveForConsultor(consultorId);
+    if (!account) {
+      throw new Error(
+        `No hay cuenta de Google Calendar configurada para el consultor ${consultorId}. ` +
+          `Agrega su UUID a GOOGLE_CALENDAR_ACCOUNTS o desactiva STRICT_CALENDAR_ACCOUNTS ` +
+          `si prefieres el fallback legacy.`
+      );
+    }
+    return account;
   }
 
   /**
-   * Crea un evento en Google Calendar con conferencia de Meet.
-   * Devuelve la URL del Meet o lanza un error con detalle del problema.
+   * Consulta freebusy del calendario de la cuenta para detectar
+   * conflictos reales en Google (además de la validación de BD).
+   * Devuelve `true` si el rango está libre en Google Calendar.
    */
-  async generateMeetLink(
-    consultantEmail: string,
-    clientEmail: string,
-    clientName: string,
+  async isSlotFreeInCalendar(
+    consultorId: string,
     startTime: Date,
     endTime: Date
-  ): Promise<string> {
-    const auth = await this.initializeAuth();
+  ): Promise<boolean> {
+    try {
+      const account = this.resolveAccountForConsultorOrThrow(consultorId);
+      const auth = await this.getAuthForAccount(account);
+      const calendar = google.calendar({ version: 'v3', auth });
+      const res = await calendar.freebusy.query({
+        requestBody: {
+          timeMin: startTime.toISOString(),
+          timeMax: endTime.toISOString(),
+          items: [{ id: account.calendarId }],
+        },
+      });
+      const busy = res.data.calendars?.[account.calendarId]?.busy || [];
+      return busy.length === 0;
+    } catch (err: any) {
+      // En caso de fallo de red o auth: devolvemos `true` para no
+      // bloquear el agendado con un error transitorio de Google (la BD
+      // sigue siendo el gate primario). Se registra para diagnóstico.
+      logger.error(
+        this.getGoogleErrorDebug(err),
+        '[GoogleMeet] freebusy falló, se ignora el resultado y se confía en la validación de BD.'
+      );
+      return true;
+    }
+  }
+
+  /**
+   * Crea un evento en Google Calendar con Meet en la cuenta del
+   * consultor. Devuelve `{ meetLink, eventId, calendarAccountKey }`.
+   */
+  async createEventForConsultor(params: {
+    consultorId: string;
+    consultantEmail: string;
+    clientEmail: string;
+    clientName: string;
+    startTime: Date;
+    endTime: Date;
+  }): Promise<{ meetLink: string; eventId: string; calendarAccountKey: string }> {
+    const account = this.resolveAccountForConsultorOrThrow(params.consultorId);
+    const auth = await this.getAuthForAccount(account);
     const calendar = google.calendar({ version: 'v3', auth });
 
     const requestId = `ddl-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
     const event = {
-      summary: `Sesión estratégica · ${clientName}`,
+      summary: `Sesión estratégica · ${params.clientName}`,
       description:
         'Sesión exploratoria con Díaz Lara Consultores.\n' +
         'Asesoría fiscal, contable y financiera.',
       start: {
-        dateTime: startTime.toISOString(),
+        dateTime: params.startTime.toISOString(),
         timeZone: 'America/Mexico_City',
       },
       end: {
-        dateTime: endTime.toISOString(),
+        dateTime: params.endTime.toISOString(),
         timeZone: 'America/Mexico_City',
       },
-      attendees: this.buildAttendees(consultantEmail, clientEmail, clientName),
+      attendees: this.buildAttendees(
+        params.consultantEmail,
+        params.clientEmail,
+        params.clientName
+      ),
       conferenceData: {
         createRequest: {
           requestId,
@@ -204,61 +261,43 @@ class GoogleMeetService {
 
     let response: any;
     try {
-      logger.info({
-        calendarId: env.GOOGLE_CALENDAR_ID,
-        serviceAccountEmail: this.serviceAccountEmail,
-        impersonatedUser: this.impersonatedUser || null,
-        hasDomainWideDelegationSubject: Boolean(this.impersonatedUser),
-        conferenceDataVersion: 1,
-        sendUpdates: 'all',
-        requestId,
-        event: {
-          summary: event.summary,
-          start: event.start,
-          end: event.end,
-          attendees: event.attendees.map((attendee) => attendee.email),
-          conferenceType: event.conferenceData.createRequest.conferenceSolutionKey.type,
+      logger.info(
+        {
+          accountKey: account.key,
+          calendarId: account.calendarId,
+          impersonatedUser: account.impersonateUser,
+          serviceAccountEmail: this.serviceAccountEmail,
+          requestId,
+          event: {
+            summary: event.summary,
+            start: event.start,
+            end: event.end,
+            attendees: event.attendees.map((a) => a.email),
+          },
         },
-      }, '[GoogleMeet] Insertando evento en Google Calendar');
+        '[GoogleMeet] Insertando evento en Google Calendar'
+      );
 
       response = await calendar.events.insert({
-        calendarId: env.GOOGLE_CALENDAR_ID!,
+        calendarId: account.calendarId,
         requestBody: event as any,
         conferenceDataVersion: 1,
         sendUpdates: 'all',
       });
-
-      logger.info({
-        status: response.status,
-        statusText: response.statusText,
-        eventId: response.data?.id,
-        htmlLink: response.data?.htmlLink,
-        hangoutLink: response.data?.hangoutLink,
-        conferenceData: response.data?.conferenceData,
-        creator: response.data?.creator,
-        organizer: response.data?.organizer,
-      }, '[GoogleMeet] Respuesta de Google Calendar events.insert');
     } catch (apiErr: any) {
-      // Extraer mensaje de error específico de Google para facilitar diagnóstico
       const gMsg = this.getGoogleErrorMessage(apiErr);
-      logger.error(this.getGoogleErrorDebug(apiErr), '[GoogleMeet] Error completo de Google Calendar events.insert');
+      logger.error(
+        this.getGoogleErrorDebug(apiErr),
+        `[GoogleMeet] Error en events.insert para cuenta "${account.key}"`
+      );
       if (gMsg.includes('Service accounts cannot invite attendees')) {
         throw new Error(
-          'Google Calendar API error: Service accounts cannot invite attendees without Domain-Wide Delegation of Authority. ' +
-          'Estás autenticando como service account, no como un usuario Workspace. ' +
-          'GOOGLE_IMPERSONATE_USER debe ser un usuario real de Google Workspace autorizado con Domain-Wide Delegation; ' +
-          'no puede ser el email del service account ni una cuenta Gmail personal.'
+          `Google Calendar (cuenta ${account.key}): faltan permisos de Domain-Wide Delegation. ` +
+            `Verifica que ${account.impersonateUser} sea un usuario real de Workspace y que el ` +
+            `service account tenga delegación autorizada en Admin Console.`
         );
       }
-      if (gMsg.includes('Invalid conference type value')) {
-        throw new Error(
-          'Google Calendar API error: Invalid conference type value. ' +
-          'El calendario acepta eventos, pero esta autenticación no puede crear enlaces de Meet. ' +
-          'Usa un usuario Google Workspace con Domain-Wide Delegation en GOOGLE_IMPERSONATE_USER, ' +
-          'o cambia la integración a OAuth de usuario.'
-        );
-      }
-      throw new Error(`Google Calendar API error: ${gMsg}`);
+      throw new Error(`Google Calendar API error (${account.key}): ${gMsg}`);
     }
 
     const meetLink =
@@ -269,29 +308,130 @@ class GoogleMeetService {
 
     if (!meetLink) {
       throw new Error(
-        'Evento creado en Google Calendar pero no se generó enlace de Meet. ' +
-        'Verifica que la Calendar API y Meet estén habilitados en Google Cloud Console.'
+        `Evento creado en Google Calendar (cuenta ${account.key}) pero no se generó enlace de Meet.`
+      );
+    }
+    if (!response.data.id) {
+      throw new Error(
+        `Evento creado en Google Calendar (cuenta ${account.key}) pero Google no devolvió eventId.`
       );
     }
 
-    logger.info(`✓ Google Meet generado para ${clientEmail}: ${meetLink}`);
-    return meetLink;
+    logger.info(
+      `✓ Google Meet generado en cuenta "${account.key}" para ${params.clientEmail}: ${meetLink} (eventId=${response.data.id})`
+    );
+
+    return {
+      meetLink,
+      eventId: String(response.data.id),
+      calendarAccountKey: account.key,
+    };
   }
 
   /**
-   * Verifica la conexión con Google Calendar.
-   * Útil para diagnosticar en el arranque del servidor.
+   * Cancela un evento previamente creado, usando la MISMA cuenta con la
+   * que se creó (obligatorio: `accountKey` viene de la BD).
+   */
+  async cancelEvent(accountKey: string, eventId: string): Promise<void> {
+    if (!accountKey || !eventId) return;
+    const account = calendarAccountRegistry.getByKey(accountKey);
+    if (!account) {
+      logger.warn(
+        `[GoogleMeet] No se puede cancelar eventId=${eventId}: cuenta "${accountKey}" no está configurada actualmente.`
+      );
+      return;
+    }
+    try {
+      const auth = await this.getAuthForAccount(account);
+      const calendar = google.calendar({ version: 'v3', auth });
+      await calendar.events.delete({
+        calendarId: account.calendarId,
+        eventId,
+        sendUpdates: 'all',
+      });
+      logger.info(`[GoogleMeet] Evento ${eventId} cancelado en cuenta "${account.key}".`);
+    } catch (err: any) {
+      logger.error(
+        this.getGoogleErrorDebug(err),
+        `[GoogleMeet] No se pudo cancelar evento ${eventId} en cuenta "${account.key}".`
+      );
+    }
+  }
+
+  /**
+   * Reprograma un evento existente (cambia fecha/hora). Devuelve el
+   * nuevo Meet link — normalmente el mismo, pero puede regenerarse.
+   */
+  async rescheduleEvent(params: {
+    accountKey: string;
+    eventId: string;
+    startTime: Date;
+    endTime: Date;
+  }): Promise<{ meetLink: string | null }> {
+    const account = calendarAccountRegistry.getByKey(params.accountKey);
+    if (!account) {
+      throw new Error(
+        `No se puede reprogramar: la cuenta "${params.accountKey}" no está configurada.`
+      );
+    }
+    const auth = await this.getAuthForAccount(account);
+    const calendar = google.calendar({ version: 'v3', auth });
+    const res = await calendar.events.patch({
+      calendarId: account.calendarId,
+      eventId: params.eventId,
+      sendUpdates: 'all',
+      requestBody: {
+        start: { dateTime: params.startTime.toISOString(), timeZone: 'America/Mexico_City' },
+        end: { dateTime: params.endTime.toISOString(), timeZone: 'America/Mexico_City' },
+      },
+    });
+    const meetLink =
+      res.data.hangoutLink ||
+      res.data.conferenceData?.entryPoints?.find((e: any) => e.entryPointType === 'video')?.uri ||
+      null;
+    return { meetLink };
+  }
+
+  /**
+   * @deprecated Compatibilidad. Usa `createEventForConsultor`.
+   * Lanza para forzar el uso del método nuevo con `consultorId`.
+   */
+  async generateMeetLink(
+    _consultantEmail: string,
+    _clientEmail: string,
+    _clientName: string,
+    _startTime: Date,
+    _endTime: Date
+  ): Promise<string> {
+    throw new Error(
+      'generateMeetLink() está deprecado; usa createEventForConsultor({ consultorId, ... }).'
+    );
+  }
+
+  /**
+   * Verifica la conexión con cada cuenta configurada. Útil en el
+   * arranque del servidor.
    */
   async testConnection(): Promise<void> {
-    try {
-      const auth = await this.initializeAuth();
-      const calendar = google.calendar({ version: 'v3', auth });
-      await calendar.calendars.get({ calendarId: env.GOOGLE_CALENDAR_ID! });
-      logger.info(`✓ Google Calendar conectado: ${env.GOOGLE_CALENDAR_ID}`);
-    } catch (err: any) {
-      const gMsg = this.getGoogleErrorMessage(err);
-      logger.error(`✗ Google Calendar connection test failed: ${gMsg}`);
-      throw new Error(`Google Calendar no disponible: ${gMsg}`);
+    const accounts = calendarAccountRegistry.list();
+    if (accounts.length === 0) {
+      logger.warn('[GoogleMeet] No hay cuentas de calendario configuradas.');
+      return;
+    }
+    for (const account of accounts) {
+      try {
+        const auth = await this.getAuthForAccount(account);
+        const calendar = google.calendar({ version: 'v3', auth });
+        await calendar.calendars.get({ calendarId: account.calendarId });
+        logger.info(
+          `✓ Google Calendar conectado: cuenta="${account.key}" user=${account.impersonateUser} calendarId=${account.calendarId}`
+        );
+      } catch (err: any) {
+        const gMsg = this.getGoogleErrorMessage(err);
+        logger.error(
+          `✗ Falla de conexión a Google Calendar (cuenta "${account.key}"): ${gMsg}`
+        );
+      }
     }
   }
 }

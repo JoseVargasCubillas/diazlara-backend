@@ -50,6 +50,10 @@ export const env = {
   GOOGLE_CALENDAR_ID: process.env.GOOGLE_CALENDAR_ID,
   GOOGLE_IMPERSONATE_USER: process.env.GOOGLE_IMPERSONATE_USER,
   GOOGLE_MEET_EXTRA_ATTENDEES: process.env.GOOGLE_MEET_EXTRA_ATTENDEES,
+  // Multi-cuenta de calendarios (JSON). Ver docs/GOOGLE_MEET_SETUP.md
+  GOOGLE_CALENDAR_ACCOUNTS: process.env.GOOGLE_CALENDAR_ACCOUNTS,
+  // Si "true", rechaza intentos de agendar contra un consultor sin cuenta configurada.
+  STRICT_CALENDAR_ACCOUNTS: process.env.STRICT_CALENDAR_ACCOUNTS,
   // SMTP (replaces SendGrid)
   SMTP_HOST: process.env.SMTP_HOST,
   SMTP_PORT: parseInt(process.env.SMTP_PORT || '587', 10),

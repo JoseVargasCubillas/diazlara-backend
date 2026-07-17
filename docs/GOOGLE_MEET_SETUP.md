@@ -37,13 +37,71 @@ En `.env`:
 #   (Get-Content .\service-account.json -Raw) -replace "`r`n",""
 GOOGLE_SERVICE_ACCOUNT_JSON={"type":"service_account","project_id":"...","private_key":"-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n", ...}
 
-# Usuario de Workspace que será el "organizador" de las reuniones.
-# Las videollamadas aparecerán en su Google Calendar.
-GOOGLE_IMPERSONATE_USER=contacto@diazlara.mx
+# --- Modo multi-cuenta (recomendado en producción) ---
+# JSON con la lista de cuentas Workspace autorizadas. Cada consultor_id
+# (UUID de la tabla CONSULTORES) resuelve a exactamente una cuenta.
+GOOGLE_CALENDAR_ACCOUNTS=[{"key":"jessica","impersonateUser":"jessica.tapia@diegodiaz.mx","calendarId":"primary","consultorIds":["<UUID_JESSICA>"]},{"key":"jazmin","impersonateUser":"fiscalista@diegodiaz.mx","calendarId":"primary","consultorIds":["<UUID_JAZMIN>"]}]
 
-# (Opcional) ID de calendario; "primary" = calendario principal del usuario impersonado.
+# Si "true", rechaza intentos de agendar contra un consultor no mapeado.
+STRICT_CALENDAR_ACCOUNTS=true
+
+# --- Compatibilidad hacia atrás (una sola cuenta) ---
+# Se usan sólo si GOOGLE_CALENDAR_ACCOUNTS está vacío.
+GOOGLE_IMPERSONATE_USER=contacto@diazlara.mx
 GOOGLE_CALENDAR_ID=primary
 ```
+
+### Modo multi-cuenta explicado
+
+- El **mismo service account** puede impersonar a Jessica y a Jazmin: en el
+  Admin Console autorizas UNA vez el `client_id` numérico con los scopes de
+  Calendar (paso 3) y a partir de ahí el backend puede actuar como
+  cualquier usuario del dominio (`@diegodiaz.mx`).
+- No hay que compartir calendarios entre las dos cuentas. Cada evento
+  vive en el calendario `primary` de la consultora que aparece como
+  `impersonateUser`, ella es la organizadora del Meet y quien envía la
+  invitación al lead.
+- El resolver del backend usa el `consultor_id` que el frontend envía en
+  `POST /api/admin/leads-espera/:id/asignar-sesion`. No hay selector de
+  cuenta en el frontend.
+- Si un `consultor_id` no está mapeado y `STRICT_CALENDAR_ACCOUNTS=true`,
+  el backend responde con un error claro sin caer al calendario legacy.
+
+### Cómo autorizar la cuenta de Jessica
+
+1. Confirma que Jessica tiene un usuario activo en Google Workspace
+   (`jessica.tapia@diegodiaz.mx` o el correo real que uses).
+2. Obtén su `consultor_id` (UUID) desde la BD:
+   ```sql
+   SELECT id, nombre, apellido, email FROM CONSULTORES
+   WHERE nombre LIKE 'Jessica%' AND apellido LIKE 'Tapia%';
+   ```
+3. Agrégala como entrada `"key":"jessica"` en `GOOGLE_CALENDAR_ACCOUNTS`
+   con ese `consultorIds`.
+4. Reinicia el backend. En los logs debe aparecer
+   `[Startup] Google Calendar accounts loaded` con la key `jessica`.
+
+### Cómo autorizar la cuenta de Jazmin (`fiscalista@diegodiaz.mx`)
+
+1. Igual que Jessica: confirma usuario Workspace y busca su `consultor_id`:
+   ```sql
+   SELECT id, nombre, apellido, email FROM CONSULTORES
+   WHERE nombre LIKE 'Jazmin%' AND apellido LIKE 'Robles%';
+   ```
+2. Agrégala como entrada `"key":"jazmin"`.
+3. Reinicia el backend.
+
+### Migración de BD
+
+Correr una única vez (MySQL 8.0.29+ o MariaDB 10.0.2+):
+
+```bash
+mysql -u <user> -p <db> < scripts/2026-07-add-calendar-account-to-citas.sql
+```
+
+Agrega dos columnas a `CITAS`: `google_event_id` (para cancelar/reprogramar
+en el calendario correcto) y `calendar_account_key` (para saber qué cuenta
+lo creó). Sin la migración, las cancelaciones no se propagan a Google.
 
 ## 5. Probar
 

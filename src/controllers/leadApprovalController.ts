@@ -9,6 +9,8 @@ import { consultoriaIntegrationService } from '../services/ConsultoriaIntegratio
 import { appointmentController } from './appointmentController';
 import { CLIENT_STATUS_DEFAULT, CLIENT_STATUS_OPTIONS, ClientStatus, isClientStatus } from '../constants/clientStatus';
 import { roundRobinService } from '../services/RoundRobinService';
+import { calendarAccountRegistry } from '../services/CalendarAccountRegistry';
+import { googleMeetService } from '../services/GoogleMeetService';
 
 const formidable = require('formidable');
 
@@ -541,9 +543,13 @@ class LeadApprovalController {
       }
 
       const canScheduleAgendaLead = await roundRobinService.isAgendaRoundRobinConsultorId(data.consultor_id);
-      if (!isSuperAdmin && !canScheduleAgendaLead) {
-        throw new ValidationError('Consultor is not allowed to schedule organic agenda leads', {
-          consultor_id: 'Solo Daniela, Jesus o un administrador pueden agendar citas de leads organicos',
+      const hasCalendarAccount = !!calendarAccountRegistry.resolveForConsultor(data.consultor_id);
+      // Se permite agendar si el consultor está en el round-robin de
+      // agenda organica O si tiene una cuenta de Google Calendar
+      // asignada (Jessica / Jazmin). Los super_admin siempre pueden.
+      if (!isSuperAdmin && !canScheduleAgendaLead && !hasCalendarAccount) {
+        throw new ValidationError('Consultor is not allowed to schedule sessions', {
+          consultor_id: 'Este consultor no puede agendar sesiones. Solo los session holders con cuenta de calendario configurada o los consultores de agenda pueden hacerlo.',
         });
       }
 
@@ -560,7 +566,14 @@ class LeadApprovalController {
         : new Date(startTime.getTime() + (15 * 60 * 1000));
 
       // If this lead/cliente already has pending/confirmed citas (with ANY consultor),
-      // cancel them so reschedules don't trigger slot conflicts.
+      // cancel them so reschedules don't trigger slot conflicts. Ademas, si tienen
+      // evento en Google, cancelamos alli tambien para no dejar Meets huerfanos.
+      const [priorCitas] = await pool.execute(
+        `SELECT id, google_event_id, calendar_account_key FROM CITAS
+         WHERE cliente_id = ?
+           AND estado IN ('pendiente', 'agendada', 'confirmada')`,
+        [clientId]
+      );
       await pool.execute(
         `UPDATE CITAS
          SET estado = 'cancelada'
@@ -568,6 +581,22 @@ class LeadApprovalController {
            AND estado IN ('pendiente', 'agendada', 'confirmada')`,
         [clientId]
       );
+      if (Array.isArray(priorCitas)) {
+        for (const raw of priorCitas as any[]) {
+          if (raw?.google_event_id && raw?.calendar_account_key) {
+            setImmediate(() => {
+              googleMeetService
+                .cancelEvent(raw.calendar_account_key, raw.google_event_id)
+                .catch((err) => {
+                  logger.error(
+                    `Failed to cancel old Google event ${raw.google_event_id}:`,
+                    err
+                  );
+                });
+            });
+          }
+        }
+      }
 
       const appointment = await appointmentController.createAppointment(clientId, {
         cliente_id: clientId,

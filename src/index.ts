@@ -2,6 +2,8 @@ import app from './app';
 import { validateEnvironment } from './config/environment';
 import { logger } from './config/logger';
 import { appointmentScheduler } from './services/AppointmentScheduler';
+import { calendarAccountRegistry } from './services/CalendarAccountRegistry';
+import { googleMeetService } from './services/GoogleMeetService';
 
 // Validate environment variables at startup
 try {
@@ -16,11 +18,26 @@ const PORT = parseInt(process.env.PORT || '3000', 10);
 const server = app.listen(PORT, () => {
   logger.info(`✓ Server running on http://localhost:${PORT}`);
   logger.info(`✓ Environment: ${process.env.NODE_ENV}`);
-  logger.info({
-    googleCalendarId: process.env.GOOGLE_CALENDAR_ID,
-    googleImpersonateUser: process.env.GOOGLE_IMPERSONATE_USER,
-    googleMeetExtraAttendees: process.env.GOOGLE_MEET_EXTRA_ATTENDEES,
-  }, '[Startup] Google Calendar configuration loaded');
+
+  const accounts = calendarAccountRegistry.list();
+  logger.info(
+    {
+      strict: process.env.STRICT_CALENDAR_ACCOUNTS,
+      accounts: accounts.map((a) => ({
+        key: a.key,
+        impersonateUser: a.impersonateUser,
+        calendarId: a.calendarId,
+        consultorIds: a.consultorIds.length,
+        legacy: !!a.legacy,
+      })),
+    },
+    '[Startup] Google Calendar accounts loaded'
+  );
+
+  // Prueba conexión a cada cuenta (no bloquea el arranque si falla).
+  googleMeetService.testConnection().catch((err) => {
+    logger.error({ err }, '[Startup] Google Calendar test failed');
+  });
 
   // Start appointment scheduler
   appointmentScheduler.start();
