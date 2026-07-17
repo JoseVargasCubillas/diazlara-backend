@@ -751,6 +751,25 @@ class LeadApprovalController {
     }
   }
 
+  async deleteHistoryRecord(historicoId: string) {
+    try {
+      const pool = await getDatabase();
+      const [result]: any = await pool.execute(
+        'DELETE FROM HISTORICO_CLIENTES WHERE id = ?',
+        [historicoId]
+      );
+      if (!result || result.affectedRows === 0) {
+        const err: any = new Error('Registro no encontrado en el historico.');
+        err.statusCode = 404;
+        throw err;
+      }
+      return { deleted: true, id: historicoId };
+    } catch (error) {
+      logger.error('Error deleting client history record:', error);
+      throw error;
+    }
+  }
+
   async listClientHistory(limit: number = 50, etiqueta?: string) {
     try {
       const pool = await getDatabase();

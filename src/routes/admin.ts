@@ -255,6 +255,31 @@ router.post(
 );
 
 /**
+ * DELETE /api/admin/historico-clientes/:historicoId
+ * Elimina permanentemente un registro del histórico.
+ * Solo super_admin puede realizar esta operación.
+ */
+router.delete(
+  '/historico-clientes/:historicoId',
+  authenticateToken,
+  async (req: Request, res: Response, next: NextFunction) => {
+    try {
+      if (req.user?.role !== 'super_admin') {
+        throw new AppError('Solo un super administrador puede eliminar del historico.', 403);
+      }
+      const result = await leadApprovalController.deleteHistoryRecord(req.params.historicoId);
+      res.json({
+        success: true,
+        data: result,
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) {
+      next(error);
+    }
+  }
+);
+
+/**
  * GET /api/admin/clientes-consultor
  * List manually added clients. Super admins see all, consultants see their own.
  */
