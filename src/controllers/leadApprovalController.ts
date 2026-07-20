@@ -581,19 +581,25 @@ class LeadApprovalController {
            AND estado IN ('pendiente', 'agendada', 'confirmada')`,
         [clientId]
       );
+      // IMPORTANT: cancelar los eventos de Google Calendar de forma
+      // sincrona ANTES de crear la nueva cita. Si lo hacemos con
+      // setImmediate, el chequeo freebusy que hace createAppointment ve
+      // el evento viejo como ocupado y responde 409, bloqueando la
+      // reprogramacion del mismo lead.
       if (Array.isArray(priorCitas)) {
         for (const raw of priorCitas as any[]) {
           if (raw?.google_event_id && raw?.calendar_account_key) {
-            setImmediate(() => {
-              googleMeetService
-                .cancelEvent(raw.calendar_account_key, raw.google_event_id)
-                .catch((err) => {
-                  logger.error(
-                    `Failed to cancel old Google event ${raw.google_event_id}:`,
-                    err
-                  );
-                });
-            });
+            try {
+              await googleMeetService.cancelEvent(
+                raw.calendar_account_key,
+                raw.google_event_id
+              );
+            } catch (err) {
+              logger.error(
+                `Failed to cancel old Google event ${raw.google_event_id}:`,
+                err
+              );
+            }
           }
         }
       }
