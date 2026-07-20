@@ -55,19 +55,33 @@ class AppointmentController {
       }
 
       // 2) Validación adicional contra el Google Calendar de la cuenta
-      //    asignada al consultor (freebusy). Si Google reporta ocupado
-      //    respondemos 409 igual que ante conflictos de BD.
-      const freeInGoogle = await googleMeetService.isSlotFreeInCalendar(
-        data.consultor_id,
-        startTime,
-        endTime
-      );
-      if (!freeInGoogle) {
-        throw new ConflictError('Time slot is not available in Google Calendar', {
-          consultorId: data.consultor_id,
-          startTime: data.fecha_hora_inicio,
-          endTime: data.fecha_hora_fin,
-        });
+      //    asignada al consultor (freebusy). Solo bloquea con 409 si
+      //    STRICT_GOOGLE_FREEBUSY=true; por defecto solo loguea, porque
+      //    Jessica y Jazmin pueden tener eventos personales que no
+      //    deben impedir agendar sesiones de negocio (la BD es la
+      //    autoridad para nuestras sesiones).
+      try {
+        const freeInGoogle = await googleMeetService.isSlotFreeInCalendar(
+          data.consultor_id,
+          startTime,
+          endTime
+        );
+        if (!freeInGoogle) {
+          if (process.env.STRICT_GOOGLE_FREEBUSY === 'true') {
+            throw new ConflictError('Time slot is not available in Google Calendar', {
+              consultorId: data.consultor_id,
+              startTime: data.fecha_hora_inicio,
+              endTime: data.fecha_hora_fin,
+            });
+          }
+          logger.warn(
+            `[GoogleMeet] Slot ocupado en Calendar para consultor=${data.consultor_id} ` +
+              `(${data.fecha_hora_inicio}-${data.fecha_hora_fin}). Se continua porque STRICT_GOOGLE_FREEBUSY!=true.`
+          );
+        }
+      } catch (fbErr: any) {
+        if (fbErr instanceof ConflictError) throw fbErr;
+        logger.error(`[GoogleMeet] freebusy fallo: ${fbErr?.message || fbErr}`);
       }
 
       // Consultant and client details for Google Meet
